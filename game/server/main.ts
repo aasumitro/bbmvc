@@ -18,27 +18,38 @@ import { createGameServer } from './server'
 //   NET_JITTER_MS          development only: ms either side of NET_LAG_MS, message by message (order kept)
 
 const env = process.env
+const refuse = (reason: string): never => {
+  console.error(JSON.stringify({ time: new Date().toISOString(), msg: 'not starting', reason }))
+  process.exit(1)
+}
 const list = (value: string | undefined, fallback: string[]) => (value ? value.split(',').map((s) => s.trim()).filter(Boolean) : fallback)
+// A whole number from the environment, or the default when it's unset. Anything
+// else stops the server: a setting that reads as NaN fails quietly elsewhere
+// (MAX_ROOMS as NaN once left the matcher no room to open, so nobody was matched).
+const whole = (name: string, fallback: number, least: number) => {
+  const raw = env[name]
+  if (raw === undefined || raw === '') return fallback
+  const value = Number(raw)
+  return Number.isInteger(value) && value >= least ? value : refuse(`${name} is ${JSON.stringify(raw)}: a whole number of ${least} or more`)
+}
 const trustProxy = env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true'
 const key = env.NAKAMA_ENCRYPTION_KEY || 'defaultencryptionkey'
 // Behind the proxy is production: there, Nakama's default key (or none) would let anyone sign a session.
-if (trustProxy && key === 'defaultencryptionkey') {
-  console.error(JSON.stringify({ time: new Date().toISOString(), msg: 'not starting', reason: 'NAKAMA_ENCRYPTION_KEY is unset or Nakama’s default, and TRUST_PROXY says this is production' }))
-  process.exit(1)
-}
+if (trustProxy && key === 'defaultencryptionkey') refuse('NAKAMA_ENCRYPTION_KEY is unset or Nakama’s default, and TRUST_PROXY says this is production')
+const settings = { port: whole('PORT', 7360, 0), maxRooms: whole('MAX_ROOMS', 12, 1), lag: whole('NET_LAG_MS', 0, 0), jitter: whole('NET_JITTER_MS', 0, 0) }
 
 await initPhysics()
 for (const id of Object.keys(MAPS) as MapId[]) arenaData(id)
 
 const server = createGameServer({
-  port: Number(env.PORT ?? 7360),
+  port: settings.port,
   key,
   origins: list(env.ALLOWED_ORIGINS, ['http://localhost:*', 'http://127.0.0.1:*', 'https://localhost:*', 'https://127.0.0.1:*']),
-  maxRooms: Number(env.MAX_ROOMS ?? 12),
+  maxRooms: settings.maxRooms,
   trustProxy,
   strict: trustProxy,
-  lag: Number(env.NET_LAG_MS ?? 0),
-  jitter: Number(env.NET_JITTER_MS ?? 0),
+  lag: settings.lag,
+  jitter: settings.jitter,
 })
 await server.listen()
 

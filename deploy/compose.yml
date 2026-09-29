@@ -37,7 +37,6 @@ services:
       - PORT=7360
       - NAKAMA_ENCRYPTION_KEY=${NAKAMA_ENCRYPTION_KEY:?}
       - ALLOWED_ORIGINS=https://${SITE_DOMAIN:?set SITE_DOMAIN in deploy/.env}
-      - MAX_ROOMS=${MAX_ROOMS:-12}
       - TRUST_PROXY=1
     volumes:
       # server/current: the release scripts/deploy.sh switched to (server/releases/<sha>), read when the container starts
