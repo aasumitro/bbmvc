@@ -1,17 +1,19 @@
 ---
-import { SITE } from '@/lib/site'
-
-// Google Analytics (gtag.js), loaded without holding up the page.
-const id = SITE.analytics
+// Google Analytics, only for a visitor who said yes to the cookie banner
+// (components/site/ConsentBanner.astro): started on the answer, or on every
+// page after it; a later no stops it.
 ---
 
-<script is:inline async src={`https://www.googletagmanager.com/gtag/js?id=${id}`}></script>
-<script is:inline define:vars={{ id }}>
-  window.dataLayer = window.dataLayer || []
-  function gtag() {
-    // eslint-disable-next-line prefer-rest-params -- gtag.js reads Arguments objects, not arrays
-    dataLayer.push(arguments)
+<script>
+  import { startAnalytics, stopAnalytics } from '@/lib/analytics'
+  import { onConsent, readConsent } from '@/lib/consent'
+
+  function apply() {
+    const consent = readConsent()
+    if (consent === 'granted') startAnalytics()
+    else if (consent === 'denied') stopAnalytics()
   }
-  gtag('js', new Date())
-  gtag('config', id)
+
+  apply()
+  onConsent(apply)
 </script>

@@ -1,11 +1,13 @@
 ---
 import Head from '@/components/head/Head.astro'
+import ConsentBanner from '@/components/site/ConsentBanner.astro'
 import type { PageMeta } from '@/lib/seo'
 import '@/styles/global.css'
 
 type Props = PageMeta
 
-// Every page's frame: the head, a skip link for keyboard users, the page.
+// Every page's frame: the head, a skip link for keyboard users, the page,
+// the cookie banner.
 ---
 
 <!doctype html>
@@ -18,5 +20,6 @@ type Props = PageMeta
       Skip to content
     </a>
     <slot />
+    <ConsentBanner />
   </body>
 </html>

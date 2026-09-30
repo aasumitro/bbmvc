@@ -8,7 +8,7 @@ Site (`www/`, Astro 7, static output — no server runs it; the server's Caddy s
 - JavaScript only where the page needs it: header name and player counts are small scripts in their `.astro` components (no React, no Nakama client); React islands (`src/islands/`) only for the forms on login, register and account
 - Home (`src/pages/index.astro`) is one full-screen scene: live player count (`components/site/PlayerCount.astro`, also in the footer), headline, one line, Play; the header laid over a looping gameplay video (`public/video/hero-v*.{webm,mp4}`, `lib/hero.ts`, poster `src/assets/hero-poster.jpg`; how it was cut: `.claude/work/www/WWW_IMPLEMENTATION_LOG.md`)
 - The guide: `src/content/guide/*.mdx` (a content collection; frontmatter title + description), listed and ordered in `src/lib/guide.ts` (routes, sidebar, pager, sitemap), styled by `src/styles/guide.css`. Its facts come from the game's code (see the root `AGENTS.md`)
-- SEO: every page states its title, description, canonical path and `index` to its layout (`lib/seo.ts`, `components/head/Seo.astro`); sitemap and robots are `src/pages/*.ts`; Google Analytics in `components/head/Analytics.astro`
+- SEO: every page states its title, description, canonical path and `index` to its layout (`lib/seo.ts`, `components/head/Seo.astro`); sitemap and robots are `src/pages/*.ts`; Google Analytics in `components/head/Analytics.astro` (`lib/analytics.ts`), only after a yes to the cookie banner (`components/site/ConsentBanner.astro`, every page; the footer's Cookies asks again; `lib/consent.ts`); what the site keeps: the FAQ's "What does the site keep about me?"
 - `SITE_URL` (build time, see `.env.example`) for canonical links and the sitemap
 
 ## Where this project departs from the shared guides

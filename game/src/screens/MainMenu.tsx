@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { startAnalytics } from '../analytics'
 import { MENU_BACKDROP } from '../game/loading'
 import { player, type Player } from '../net/session'
 import { Drawer } from './Drawer'
@@ -39,6 +40,8 @@ export function MainMenu({ onPlay, onGarage }: MainMenuProps) {
   )
 
   const [selected, setSelected] = useState(0)
+
+  useEffect(startAnalytics, []) // one page view, on the first menu, if the site's banner got a yes
 
   // Who is playing: signed in on the site, a guest, or no server (practice still works).
   const [who, setWho] = useState<Player | 'offline'>()

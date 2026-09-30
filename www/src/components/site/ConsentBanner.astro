@@ -1,0 +1,43 @@
+---
+// The cookie banner: asks once whether Google Analytics may count the visit,
+// on every page until answered (lib/consent.ts). Both answers look alike, so
+// no is as easy as yes. Anything with data-consent-open (the footer's
+// "Cookies") asks again. The game never asks; it follows the answer.
+---
+
+<section
+  data-consent-banner
+  aria-label="Cookies"
+  class="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded border border-line bg-panel/95 p-5 text-sm leading-6 text-neutral-300 shadow-lg backdrop-blur-sm"
+  hidden
+>
+  <p>
+    May Google Analytics count your visit? It sets cookies to tell visits apart, and we use it only to see how people find and use Scrapyard.
+    <a href="/docs/faq#what-does-the-site-keep-about-me" class="text-link">What we keep</a>
+  </p>
+  <div class="mt-4 flex gap-3">
+    <button type="button" data-consent="granted" class="button-quiet">Accept</button>
+    <button type="button" data-consent="denied" class="button-quiet">Decline</button>
+  </div>
+</section>
+
+<script>
+  import { readConsent, writeConsent, type Consent } from '@/lib/consent'
+
+  const banner = document.querySelector<HTMLElement>('[data-consent-banner]')!
+  banner.hidden = readConsent() !== null
+
+  for (const button of banner.querySelectorAll<HTMLButtonElement>('[data-consent]')) {
+    button.addEventListener('click', () => {
+      writeConsent(button.dataset.consent as Consent)
+      banner.hidden = true
+    })
+  }
+
+  for (const open of document.querySelectorAll('[data-consent-open]')) {
+    open.addEventListener('click', () => {
+      banner.hidden = false
+      banner.querySelector('button')!.focus()
+    })
+  }
+</script>

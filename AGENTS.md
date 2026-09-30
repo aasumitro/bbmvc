@@ -47,6 +47,7 @@ The site's dev server on `:8000` is usually up too (`/api/stats` proxied to Naka
 ## Contracts between projects
 
 - One contract joins site and game: the Nakama session in localStorage `scrapyard.session` = `{ token, refresh_token, guest? }` (same origin once the game is at /play), written by `www/src/lib/nakama/` (`storage.ts` the key, `stored.ts` the format) and `game/src/net/session.ts` — change both together.
+- The cookie banner's answer joins them too: localStorage `scrapyard.consent` = `'granted' | 'denied'`, written only by the site's banner (`www/src/lib/consent.ts`), read by `game/src/analytics.ts` (Google Analytics loads only on `'granted'`; the game never asks) — change both together.
 - Nakama is who the player is: accounts, guests, sessions (the game server checks its session tokens itself, with Nakama's key), the online count and the site's stats, and the match chat.
 - The match chat joins game server, game and Nakama: the game server names each room's and team's chat channel (`sy-` and 24 hex digits, `game/server/room.ts`) and tells only that room's (team's) seats in the welcome; the page joins them (`game/src/net/chat.ts`); `nakama/data/modules/chat.lua` lets rooms in only by that pattern and holds the message rules (200 characters, 8 in 10 s) that the page's `CHAT_LIMIT` repeats — change them together.
 - Every fact in the site's home copy and guide comes from the game's code (configs, registries, patch notes): change the game first, then the copy.
