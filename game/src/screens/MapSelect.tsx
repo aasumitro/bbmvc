@@ -22,8 +22,15 @@ interface MapSelectProps {
 
 const MODE_IDS = Object.keys(MODES) as Mode[]
 const DIFFICULTY_IDS = Object.keys(DIFFICULTIES) as Difficulty[]
-const NAV_ITEMS: MenuItem[] = [...MODE_IDS.map((mode) => ({ label: MODES[mode].label })), { label: 'Back' }]
-const BACK = MODE_IDS.length
+const NAV_ITEMS: MenuItem[] = [...MODE_IDS.map((mode) => ({ label: MODES[mode].label })), { label: 'Custom', hint: 'coming soon', disabled: true }, { label: 'Back' }]
+const BACK = NAV_ITEMS.length - 1
+// the entry ↑ (-1) or ↓ (1) lands on, round the ends, over the disabled ones
+function step(from: number, by: number) {
+  let i = from
+  do i = (i + by + NAV_ITEMS.length) % NAV_ITEMS.length
+  while (NAV_ITEMS[i].disabled)
+  return i
+}
 const ROWS = ['arena', 'bots', 'play'] as const // the mode's own choices, top to bottom
 const two = (n: number) => String(n).padStart(2, '0')
 const keycap = 'rounded border border-neutral-500/50 px-1.5 py-0.5'
@@ -47,10 +54,11 @@ const globe = (
   </svg>
 )
 
-// Mode on the left; on the right the arena, how good the practice bots are,
-// then how to play it — Practice against bots, or Classic: Find Match, and
-// the game server finds people to play this mode with (net/matchmaking.ts),
-// picks the arena, and bots on Normal take the seats nobody has. A search
+// Modes on the left (and Custom, coming soon). On the right, while a mode is
+// highlighted: the arena, how good the practice bots are, then how to play
+// it — Practice against bots, or Classic: Find Match, and the game server
+// finds people to play this mode on this arena with (net/matchmaking.ts),
+// and bots on Normal take the seats nobody has. A search
 // runs on while the player waits here, practises, or goes anywhere else
 // (Matchmaking.tsx shows it there); here Classic says how long it's been and
 // cancels it. Then the mode's terms. From the keyboard, two steps:
@@ -59,24 +67,18 @@ const globe = (
 // goes down a row and on the last starts the match; Esc (or ↑ from the
 // arena) goes back to the modes. The mouse works too.
 export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
-  const first = MODE_IDS.indexOf(pick.mode)
-  const [selected, setSelected] = useState(first)
-  const [shown, setShown] = useState(first) // mode on the card; stays put while Back is highlighted
+  const [selected, setSelected] = useState(MODE_IDS.indexOf(pick.mode))
   // the arena chosen for each mode, starting from the last pick where it hosts that mode
   const [difficulty, setDifficulty] = useState(pick.difficulty)
   const [online, setOnline] = useState(pick.online) // what Enter starts: Classic, or Practice
   const [row, setRow] = useState(-1) // the choice the keys change: -1 the mode list, else a ROWS index
   const [maps, setMaps] = useState(() => Object.fromEntries(MODE_IDS.map((mode) => [mode, mapsFor(mode).includes(pick.map) ? pick.map : mapsFor(mode)[0]])) as Record<Mode, MapId>)
-  const mode = MODE_IDS[shown]
+  const mode = MODE_IDS[selected] ?? MODE_IDS[0] // on Back the right side is empty: any mode will do
   const { label, tags, blurb } = MODES[mode]
   const map = maps[mode]
   const choices = mapsFor(mode)
   const place = choices.indexOf(map)
 
-  const highlight = (i: number) => {
-    setSelected(i)
-    if (i !== BACK) setShown(i)
-  }
   const search = useSearch()
   const searching = search.phase === 'connecting' || search.phase === 'searching'
   const now = useClock(searching)
@@ -93,8 +95,8 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
   useEffect(() => {
     // the mode list: pick one and open it
     function onModes(key: string) {
-      if (key === 'ArrowDown') highlight((selected + 1) % NAV_ITEMS.length)
-      if (key === 'ArrowUp') highlight((selected - 1 + NAV_ITEMS.length) % NAV_ITEMS.length)
+      if (key === 'ArrowDown') setSelected(step(selected, 1))
+      if (key === 'ArrowUp') setSelected(step(selected, -1))
       if (key === 'Enter' || key === 'ArrowRight') {
         if (selected === BACK) return key === 'Enter' && onBack()
         setRow(0)
@@ -137,78 +139,80 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
         <p className="mt-1 font-display text-lg text-red-400/90 italic">Choose your fight</p>
       </div>
 
-      <Menu items={NAV_ITEMS} selected={selected} onSelect={highlight} onActivate={(i) => (i === BACK ? onBack() : (highlight(i), setRow(0)))} className="absolute top-44 left-[6vw]" />
+      <Menu items={NAV_ITEMS} selected={selected} onSelect={setSelected} onActivate={(i) => (i === BACK ? onBack() : (setSelected(i), setRow(0)))} className="absolute top-44 left-[6vw]" />
 
-      <div className="absolute top-1/2 right-[5vw] w-[min(55vw,900px)] -translate-y-1/2">
-        {/* the arena: its preview fades in on a change; which one of how many above its name, one pager for both ways */}
-        <div className="relative">
-          {focus === 'arena' && mark}
-          <div className={`relative aspect-[1010/470] overflow-hidden rounded-sm border bg-black shadow-[0_20px_60px_rgba(0,0,0,0.6)] ${focus === 'arena' ? 'border-red-500' : 'border-white/20'}`}>
-            <img key={map} src={MAPS[map].image} alt={MAPS[map].name} className="h-full w-full animate-fade object-cover motion-reduce:animate-none" />
-            <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/90 via-black/45 to-transparent px-6 pt-20 pb-5">
-              <div key={map} className="animate-rise motion-reduce:animate-none">
-                <p className="text-[0.65rem] font-bold tracking-[0.3em] text-neutral-300 uppercase tabular-nums">
-                  Arena <span className="text-red-400">{two(place + 1)}</span> / {two(choices.length)}
-                </p>
-                <p className="mt-1 font-display text-3xl font-semibold">{MAPS[map].name}</p>
+      {selected !== BACK && (
+        <div className="absolute top-1/2 right-[5vw] w-[min(55vw,900px)] -translate-y-1/2 animate-fade motion-reduce:animate-none">
+          {/* the arena: its preview fades in on a change; which one of how many above its name, one pager for both ways */}
+          <div className="relative">
+            {focus === 'arena' && mark}
+            <div className={`relative aspect-[1010/470] overflow-hidden rounded-sm border bg-black shadow-[0_20px_60px_rgba(0,0,0,0.6)] ${focus === 'arena' ? 'border-red-500' : 'border-white/20'}`}>
+              <img key={map} src={MAPS[map].image} alt={MAPS[map].name} className="h-full w-full animate-fade object-cover motion-reduce:animate-none" />
+              <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/90 via-black/45 to-transparent px-6 pt-20 pb-5">
+                <div key={map} className="animate-rise motion-reduce:animate-none">
+                  <p className="text-[0.65rem] font-bold tracking-[0.3em] text-neutral-300 uppercase tabular-nums">
+                    Arena <span className="text-red-400">{two(place + 1)}</span> / {two(choices.length)}
+                  </p>
+                  <p className="mt-1 font-display text-3xl font-semibold">{MAPS[map].name}</p>
+                </div>
+                {choices.length > 1 && <Pager what="arena" onStep={cycle} />}
               </div>
-              {choices.length > 1 && <Pager what="arena" onStep={cycle} />}
             </div>
           </div>
-        </div>
 
-        <div className={`relative mt-4 flex items-center gap-4 transition-opacity ${online && focus !== 'bots' ? 'opacity-50' : ''}`}>
-          {focus === 'bots' && mark}
-          <span className="text-[0.65rem] font-bold tracking-[0.3em] text-neutral-300 uppercase">Practice bots</span>
-          <div role="radiogroup" aria-label="Practice bot difficulty" className={`flex overflow-hidden rounded-md border bg-black/45 backdrop-blur-md ${focus === 'bots' ? 'border-red-500' : 'border-white/15'}`}>
-            {DIFFICULTY_IDS.map((id, i) => (
-              <Fragment key={id}>
-                {i > 0 && <span className="w-px bg-white/15" />}
-                <button
-                  role="radio"
-                  aria-checked={id === difficulty}
-                  onClick={() => setDifficulty(id)}
-                  className={`px-4 py-1.5 text-xs font-bold tracking-[0.2em] uppercase ${id === difficulty ? 'bg-red-500/30 text-white' : 'text-neutral-400 hover:text-white'}`}
-                >
-                  {DIFFICULTIES[id].label}
-                </button>
-              </Fragment>
-            ))}
+          <div className={`relative mt-4 flex items-center gap-4 transition-opacity ${online && focus !== 'bots' ? 'opacity-50' : ''}`}>
+            {focus === 'bots' && mark}
+            <span className="text-[0.65rem] font-bold tracking-[0.3em] text-neutral-300 uppercase">Practice bots</span>
+            <div role="radiogroup" aria-label="Practice bot difficulty" className={`flex overflow-hidden rounded-md border bg-black/45 backdrop-blur-md ${focus === 'bots' ? 'border-red-500' : 'border-white/15'}`}>
+              {DIFFICULTY_IDS.map((id, i) => (
+                <Fragment key={id}>
+                  {i > 0 && <span className="w-px bg-white/15" />}
+                  <button
+                    role="radio"
+                    aria-checked={id === difficulty}
+                    onClick={() => setDifficulty(id)}
+                    className={`px-4 py-1.5 text-xs font-bold tracking-[0.2em] uppercase ${id === difficulty ? 'bg-red-500/30 text-white' : 'text-neutral-400 hover:text-white'}`}
+                  >
+                    {DIFFICULTIES[id].label}
+                  </button>
+                </Fragment>
+              ))}
+            </div>
           </div>
-        </div>
 
-        <div className="relative mt-4 grid grid-cols-2 gap-4">
-          {focus === 'play' && mark}
-          <ActionButton primary={!online} icon={robot} title="Practice" line={`Play with ${DIFFICULTIES[difficulty].label} Bots${searching ? ' while you wait' : ''}`} onClick={practice} />
-          <ActionButton
-            primary={online}
-            icon={globe}
-            title={searching ? 'Cancel search' : 'Classic'}
-            line={
-              search.phase === 'connecting'
-                ? 'Connecting…'
-                : search.phase === 'searching'
-                  ? `${search.away ? 'Reconnecting…' : `Finding players · ${waited(Math.max(0, now - search.since))}`}${search.mode !== mode ? ` · ${MODES[search.mode as Mode]?.label ?? search.mode}` : ''}`
-                  : search.phase === 'idle'
-                    ? 'Find Match · Online'
-                    : 'Match found'
-            }
-            note="Find people to play this mode with online: the server picks the arena, and bots on Normal take the seats nobody has. Practise while you wait"
-            onClick={search.phase === 'idle' || searching ? classic : undefined}
-          />
-        </div>
+          <div className="relative mt-4 grid grid-cols-2 gap-4">
+            {focus === 'play' && mark}
+            <ActionButton primary={!online} icon={robot} title="Practice" line={`Play with ${DIFFICULTIES[difficulty].label} Bots${searching ? ' while you wait' : ''}`} onClick={practice} />
+            <ActionButton
+              primary={online}
+              icon={globe}
+              title={searching ? 'Cancel search' : 'Classic'}
+              line={
+                search.phase === 'connecting'
+                  ? 'Connecting…'
+                  : search.phase === 'searching'
+                    ? `${search.away ? 'Reconnecting…' : `Finding players · ${waited(Math.max(0, now - search.since))}`}${search.mode !== mode || search.map !== map ? ` · ${MODES[search.mode as Mode]?.label ?? search.mode} · ${MAPS[search.map as MapId]?.name ?? search.map}` : ''}`
+                    : search.phase === 'idle'
+                      ? 'Find Match · Online'
+                      : 'Match found'
+              }
+              note="Find people to play this mode on this arena online: bots on Normal take the seats nobody has. Practise while you wait"
+              onClick={search.phase === 'idle' || searching ? classic : undefined}
+            />
+          </div>
 
-        <p className="mt-5 flex flex-wrap gap-x-3 text-[0.8rem] font-bold tracking-[0.12em] text-neutral-400 uppercase">
-          <span className="text-red-500">{label}</span>
-          {tags.map((tag) => (
-            <span key={tag} className="flex gap-3">
-              <span className="text-neutral-500">/</span>
-              {tag}
-            </span>
-          ))}
-        </p>
-        <p className="mt-3 text-justify font-display text-base leading-relaxed text-neutral-200 italic">{blurb}</p>
-      </div>
+          <p className="mt-5 flex flex-wrap gap-x-3 text-[0.8rem] font-bold tracking-[0.12em] text-neutral-400 uppercase">
+            <span className="text-red-500">{label}</span>
+            {tags.map((tag) => (
+              <span key={tag} className="flex gap-3">
+                <span className="text-neutral-500">/</span>
+                {tag}
+              </span>
+            ))}
+          </p>
+          <p className="mt-3 text-justify font-display text-base leading-relaxed text-neutral-200 italic">{blurb}</p>
+        </div>
+      )}
 
       <div className="absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-[0.1em] text-neutral-400 uppercase">
         {row < 0 ? (

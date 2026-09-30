@@ -64,6 +64,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
   const latest = combatants.map(() => blankCar()) // each machine in the newest snapshot
   const shown = blankCar() // one machine as drawn
   const humans = link.welcome.lineUp.map((seat) => seat.human)
+  const uids = link.welcome.lineUp.map((seat) => seat.uid) // by seat: the person's user id, '' a bot's (chat's whispers)
   const shownWrecked = combatants.map(() => false) // what the view shows: a catch-up puts it right
   const net = { tick: link.welcome.tick, arrivedAt: -Infinity, drawn: 0, snapshots: 0, seq: 0, ack: -1, next: -1, hold: -1, lost: '' }
   const later: WireEvent[] = [] // events waiting for the drawing to reach their tick
@@ -91,7 +92,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     for (const { message, at } of messages) {
       if (message.t === 's') snapshot(message, at, catchUp)
       else if (message.t === 'st') state(message)
-      else if (message.t === 'ro') roster(message.seat, message.name, message.human, message.weapon)
+      else if (message.t === 'ro') roster(message.seat, message.name, message.human, message.weapon, message.uid)
     }
     if (catchUp) settle()
     net.lost = link.status.closed
@@ -195,13 +196,14 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     net.hold = st.hold
   }
 
-  function roster(seat: number, name: string, human: boolean, weapon: keyof typeof WEAPONS) {
+  function roster(seat: number, name: string, human: boolean, weapon: keyof typeof WEAPONS, uid: string) {
     const c = combatants[seat]
     if (!c) return
     // people coming and going, in the feed (the player's own seat never changes hands)
     if (human !== humans[seat] && c !== player) feed?.news(human ? `${name} joined` : `${c.name} left`, human ? '' : 'A bot takes over')
     c.name = name
     humans[seat] = human
+    uids[seat] = uid
     if (weaponId(c.weapon.spec) === weapon) return
     c.weapon = armWeapon(WEAPONS[weapon])
     refit?.(c)
@@ -405,6 +407,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     prediction: prediction.stats, // corrections, replays, errors: the F3 overlay's
     drawing: buffer.counts, // how often the others were drawn past the newest snapshot
     humans, // by seat: a person drives it
+    uids, // by seat: that person's user id ('' a bot)
     receive,
     place,
     step,

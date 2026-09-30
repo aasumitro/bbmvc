@@ -111,7 +111,7 @@ export function MainMenu({ onPlay, onGarage }: MainMenuProps) {
           ) : (
             <>
               <p className="font-sans text-[0.65rem] font-bold tracking-[0.25em] text-neutral-500 uppercase">Playing as</p>
-              <a href={who.guest ? '/register' : '/account'} title={who.guest ? 'Create an account to keep your name' : 'Your account'} className="mt-1 block font-display text-lg text-neutral-200 hover:text-white">
+              <a href={who.guest ? '/register' : '/account'} title={who.guest ? 'Guests are deleted after 3 days: create an account to keep your name' : 'Your account'} className="mt-1 block font-display text-lg text-neutral-200 hover:text-white">
                 {who.name}
               </a>
               {who.guest && (

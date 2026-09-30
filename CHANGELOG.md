@@ -7,6 +7,58 @@ version it shipped with.
 
 ## Unreleased
 
+## 0.11.0 — 2026-09-30
+
+Nakama stays the control plane (accounts, sessions, the online count, now the match chat); the
+game server stays the authority for every outcome. Plan, measurements and log:
+`.claude/work/nakama-mm/`.
+
+### Game (`game/`)
+
+- Classic plays on the arena you pick: matchmaking groups tickets by mode, arena and build,
+  and offers seats in running matches on that arena only. `PROTOCOL` 5.
+- Chat in online matches (`net/chat.ts`, `hud/Chat.tsx`): everyone, team (Team Deathmatch)
+  and whispers (`/w`, `/r`, `/mute`), over the page's Nakama socket; typing never drives.
+- The garage's loadout is kept in the browser (`scrapyard.loadout`): a reload no longer resets
+  the gun to the Minigun.
+- Arena screen: Custom (coming soon, disabled) between Free for All and Back; with Back
+  chosen, the right side is empty. Menu entries can be disabled.
+- New checks: `net/chat.check.ts`, `server/fairplay.check.ts`.
+
+### Online play (`game/server/`)
+
+- Snapshots travel as binary frames of the same integers: about a third less data down
+  (24.6 → 16.4 KB/s a player on the Scrapyard). Every other message stays JSON.
+- Match records: one JSON line per match in `MATCH_DIR` (result, each seat's person or bot,
+  statistics, fair-play counts).
+- Fair-play signals (`fairplay.ts`): aim on hidden hostiles, snaps onto targets, instant
+  triggers; flagged in the record and a log line for review, never acted on.
+- Replays: a gzipped journal per room; `node dist-server/replay.js` runs the room again to
+  the bit and compares with the kept records. Pruned after `REPLAY_DAYS` (3).
+- Each room names its chat channels (random, told only to its seats) in the welcome, with
+  each seat's user id for whispers.
+
+### Accounts (`nakama/`)
+
+- Nakama 3.30.0 → 3.41.0 (four migrations at start; they don't go back down).
+- `chat.lua`: the match chat's rules — only the game's room names, direct messages, no groups
+  or edits, nothing stored, 1–200 characters, 8 messages in 10 s a user.
+- `guests.lua`: `prune_guests` (runtime HTTP key only) deletes guests made more than 3 days
+  ago — accounts a device is the only way into — except those online at the time.
+- `scripts/chat-smoke.mjs` (also in the deploy's smoke test) and `scripts/guests-smoke.mjs`
+  (local only).
+
+### Site (`www/`)
+
+- Guide: chat controls; the FAQ says what is kept (records, replays for 3 days, no chat) and
+  that guests last 3 days; the account page tells guests too.
+
+### Deploy
+
+- The game server keeps records and replays on a named volume (`MATCH_DIR`).
+- `scripts/backup.sh` also archives the match records (not the replays), then runs the guest
+  cleanup from inside Caddy's container.
+
 ## 0.10.0 — 2026-09-29
 
 First public commit. Earlier history (0.1.0–0.9.0) was developed in a private repository and

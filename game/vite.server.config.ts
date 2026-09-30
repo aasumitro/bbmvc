@@ -16,6 +16,7 @@ const ENTRIES = {
   'client.check': 'server/client.check.ts',
   'netplay.check': 'server/netplay.check.ts',
   load: 'server/load.ts',
+  replay: 'server/replay-main.ts',
 }
 
 // dist-server/ is ES modules wherever it's copied to (the server has no package.json next to it).

@@ -1,6 +1,6 @@
 # SQL Guide — use when writing SQL in `nakama/`
 
-> Written for Scrapyard (not pulled from `aasumitro/workspace`). The database is Nakama 3.30.0's
+> Written for Scrapyard (not pulled from `aasumitro/workspace`). The database is Nakama 3.41.0's
 > Postgres 16 (`nakama/compose.yml`, `deploy/compose.yml`). SQL lives in string literals inside
 > runtime modules: `nakama/data/modules/*.lua` (`nk.sql_query`, `nk.sql_exec`), or Go modules
 > built from `nakama/modules-src/` if one is ever added.

@@ -8,7 +8,7 @@ import { createWorld, initPhysics } from '../game/physics.ts'
 import { createStats } from '../game/scoring.ts'
 import { enlist } from '../game/simulation.ts'
 import { forwardSpeed } from '../game/vehicle/drive.ts'
-import { acceptSeq, AIM_MARGIN, BUILD, carRow, clampAim, clampView, inputMessage, LIMITS, meRow, parseClient, readCar, readMe, readStats, REWIND, statsRow, weaponId, type Input } from './protocol.ts'
+import { acceptSeq, AIM_MARGIN, BUILD, carRow, clampAim, clampView, inputMessage, LIMITS, meRow, packCars, packEvents, packSnapshot, parseClient, readCar, readMe, readServer, readStats, REWIND, SNAPSHOT, statsRow, unpackSnapshot, weaponId, wireSize, type Input, type WireEvent } from './protocol.ts'
 
 await initPhysics()
 
@@ -51,6 +51,33 @@ car.weapon.reload = 1.2345
 car.stuck = 2.5
 const me = readMe(meRow(car))
 check(near(me.spin.y, -1.5678, 0.001) && near(me.steer, -0.41, 1e-4) && me.ammo === 4 && near(me.reload, 1.2345, 0.001) && near(me.stuck, 2.5, 0.001), 'the player’s own row: spin, steer, weapon, timers')
+
+// The snapshot as a binary frame: the same integers as the JSON rows, read back exactly.
+car.alive = true
+const rows = [carRow(car), [7, -45000, 150, 45000, -10000, 10000, 0, -1, -1500, 25, 3200, 1000, 0, -12, 34, -56, 100, -100]]
+const mine = meRow(car)
+const events: WireEvent[] = [['sh', 88, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 7], ['ru', 88, { kind: 'kill', killer: 3, victim: 7, name: 'Wreckage™' }]]
+const frame = packSnapshot(123456, 789, 61234, packCars(rows), mine, packEvents(events))
+const read = unpackSnapshot(frame)
+check(frame[0] === SNAPSHOT && read.t === 's' && read.k === 123456 && read.ack === 789 && read.now === 61234, 'a snapshot frame: its kind, tick, ack and clock')
+check(JSON.stringify(read.cars) === JSON.stringify(rows) && JSON.stringify(read.me) === JSON.stringify(mine), 'every machine’s row and the player’s own come back as the very same integers')
+check(JSON.stringify(read.ev) === JSON.stringify(events), 'the events come back whole (JSON after the rows, any text)')
+const quiet = unpackSnapshot(packSnapshot(5, -1, 0, packCars(rows), mine, packEvents([])))
+check(quiet.ev.length === 0 && quiet.ack === -1 && wireSize(packSnapshot(5, -1, 0, packCars(rows), mine, packEvents([]))) === 14 + 2 * 44 + 40, 'no events: nothing after the rows; an ack of -1 (no input used yet) holds')
+const offset = new Uint8Array(frame.length + 3)
+offset.set(frame, 3)
+check(unpackSnapshot(offset.subarray(3)).k === 123456 && (readServer(frame.buffer as ArrayBuffer) as { k: number }).k === 123456, 'read from a view into a larger buffer (a Node Buffer), or from an ArrayBuffer (a browser)')
+const wild = unpackSnapshot(packSnapshot(1, 0, 0, packCars([[1, 0, 0, 0, 0, 0, 0, 10000, 99999, -99999, 0, 99999, 1, 0, 0, 0, 300, -300]]), mine, packEvents([]))).cars[0]
+check(wild[8] === 32767 && wild[9] === -32768 && wild[11] === 32767 && wild[16] === 127 && wild[17] === -128, 'out-of-range fields are clamped to their size, not wrapped')
+check((readServer('{"t":"pong","c":1,"k":2}') as { t: string }).t === 'pong', 'text is JSON: every other message')
+let refused = false
+try {
+  unpackSnapshot(new Uint8Array([9, 0, 0]))
+} catch {
+  refused = true
+}
+check(refused, 'a frame that isn’t a snapshot is refused')
+check(wireSize(frame) < JSON.stringify({ t: 's', ack: 789, me: mine, k: 123456, now: 61234, cars: rows, ev: events }).length, 'the frame is smaller than the JSON it replaces')
 
 const stats = { ...createStats(), kills: 3, damageDealt: 123.456, combatScore: 461.728 }
 const statsBack = readStats(statsRow(stats), createStats())
@@ -110,9 +137,10 @@ check(!parseClient(JSON.stringify({ t: 'hello', v: 3, token: 't', mode: 7, map: 
 // --- matchmaking ----------------------------------------------------------------------------
 
 const queue = (message: object) => parseClient(JSON.stringify({ t: 'mm', ...message }))
-const search = queue({ do: 'search', mode: 'tdm', uid: 'someone-else', createdAt: 0, id: 'p1' })
-check(search.ok && JSON.stringify(search.message) === '{"t":"mm","do":"search","mode":"tdm","id":"p1"}', 'a search keeps its action, mode and id only: never a player id or a time')
-check(!queue({ do: 'search' }).ok && !queue({ do: 'search', mode: '' }).ok, 'a search needs its mode')
+const search = queue({ do: 'search', mode: 'tdm', map: 'city', uid: 'someone-else', createdAt: 0, id: 'p1' })
+check(search.ok && JSON.stringify(search.message) === '{"t":"mm","do":"search","mode":"tdm","map":"city","id":"p1"}', 'a search keeps its action, mode, map and id only: never a player id or a time')
+check(!queue({ do: 'search', map: 'city' }).ok && !queue({ do: 'search', mode: '', map: 'city' }).ok, 'a search needs its mode')
+check(!queue({ do: 'search', mode: 'tdm' }).ok && !queue({ do: 'search', mode: 'tdm', map: 7 }).ok, 'and its arena')
 check(queue({ do: 'accept', id: 'p12' }).ok && queue({ do: 'decline', id: 'p12' }).ok && !queue({ do: 'accept' }).ok && !queue({ do: 'decline', id: 5 }).ok, 'an answer needs the proposal it answers')
 check(queue({ do: 'cancel' }).ok && queue({ do: 'state' }).ok, 'cancel and state need nothing else')
 check(!queue({ do: 'start' }).ok && !queue({}).ok && !queue({ do: 'accept', id: 'x'.repeat(40) }).ok, 'an unknown action, none, or an overlong id is refused')

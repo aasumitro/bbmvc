@@ -128,3 +128,15 @@ accepted, one room opened with them on opposite sides, the HUD said
 "Waiting for players · 6 s" with the clock held at 10:00, then the match ran.
 One page was later let go after a minute without input (its window stopped
 drawing in the background: the existing idle rule).
+
+## Classic on the arena picked (2026-09-29)
+
+Classic ignored the arena card: the matcher rotated each mode's arenas from
+index 0, so the first match after a restart was always Scrapyard. Now the
+search carries the arena (`Queueing.map`, PROTOCOL 4), the lobby refuses a
+mode/arena pair the registry doesn't host, `sameQueue` adds the arena, a
+proposal plays on its tickets' arena and backfill only offers rooms on it.
+The rotation and the `arenas` hook are gone. Every arena in `MAPS` is
+playable online with no server change. The cost: the queue splits per
+arena, so few searchers wait longer. The page keeps `{ mode, map }` in the
+`scrapyard.search` mark and shows both while searching.

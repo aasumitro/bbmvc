@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { DEFAULT_LOADOUT, type Loadout } from './game/loadout'
+import { saveLoadout, savedLoadout, type Loadout } from './game/loadout'
 import { MAPS, type MapId } from './game/maps'
 import { MODES, type Mode } from './game/modes'
 import type { Link } from './net/connection'
@@ -20,7 +20,7 @@ type Screen = 'loading' | 'menu' | 'garage' | 'map-select' | 'game'
 
 function App() {
   const [screen, setScreen] = useState<Screen>('loading')
-  const [loadout, setLoadout] = useState<Loadout>(DEFAULT_LOADOUT)
+  const [loadout, setLoadout] = useState<Loadout>(savedLoadout) // the garage's last pick in this browser
   const [pick, setPick] = useState<Pick>({ mode: 'tdm', map: 'scrapyard', difficulty: 'normal', online: false })
   const [seat, setSeat] = useState<Link | null>(null) // online: the seat being played; null in practice
   const [run, setRun] = useState(0) // each match gets a fresh gameplay screen
@@ -40,6 +40,11 @@ function App() {
     [],
   )
 
+  function changeLoadout(next: Loadout) {
+    setLoadout(next)
+    saveLoadout(next) // the next visit starts with it
+  }
+
   let content
   if (screen === 'loading')
     content = (
@@ -50,14 +55,14 @@ function App() {
         }}
       />
     )
-  else if (screen === 'garage') content = <Garage loadout={loadout} onLoadout={setLoadout} onBack={() => setScreen('menu')} onSelect={() => setScreen('map-select')} />
+  else if (screen === 'garage') content = <Garage loadout={loadout} onLoadout={changeLoadout} onBack={() => setScreen('menu')} onSelect={() => setScreen('map-select')} />
   else if (screen === 'map-select')
     content = (
       <MapSelect
         pick={pick}
         onStart={(next) => {
           setPick(next)
-          if (next.online) return void findMatch(next.mode, loadout) // the search runs on; the seat comes when it's found
+          if (next.online) return void findMatch(next.mode, next.map, loadout) // the search runs on; the seat comes when it's found
           setRun((n) => n + 1)
           setScreen('game')
         }}

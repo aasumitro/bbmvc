@@ -65,6 +65,7 @@ export interface MatchParts {
 export interface MatchSource {
   online: boolean // no pause: the menu opens over a match that runs on
   people: readonly boolean[] // by seat: a person drives it (practice: the player alone)
+  uids: readonly string[] // by seat: that person's user id, '' for a bot (online: chat's whispers; practice: none)
   seed(): number
   drives(looking: boolean): boolean // the player's controls may drive this frame
   receive(now: number): void // before the frame's steps (online: what the server said)
@@ -102,6 +103,7 @@ export function createMatch({ scene, camera, arena, map, mode: kind, difficulty,
     {
       online: false,
       people: combatants.map((c) => c === player),
+      uids: combatants.map(() => ''),
       seed: () => seed,
       drives: (looking) => looking && rules.phase !== 'preMatch', // held on the grid, free to look around
       receive() {},
@@ -157,12 +159,14 @@ export function playMatch(parts: MatchParts, source: MatchSource) {
     },
     online: source.online,
     people: source.people,
+    uids: source.uids,
     map, // the arena's id
     lost: '', // why an online match's connection went
     nextIn: () => source.nextIn(performance.now()),
     holdIn: () => source.holdIn(performance.now()),
     locked: pilot.locked,
     lock: pilot.lock,
+    unlock: pilot.unlock, // the mouse back and every held key let go (the chat line: typing never drives)
     frame,
     respawnIn,
     debug,

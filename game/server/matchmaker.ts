@@ -1,9 +1,9 @@
 import type { Queue, QueueNote } from '../src/net/protocol.ts'
 
-// Classic's matchmaking: who plays together, when, and on which arena. A
-// player asks for a mode and gets a ticket. The matcher offers the oldest
-// tickets bots' seats in matches already running (a backfill), then groups
-// the rest — same mode, same build, oldest first — into proposals: eight
+// Classic's matchmaking: who plays together, and when. A player asks for a
+// mode on an arena and gets a ticket. The matcher offers the oldest tickets
+// bots' seats in matches already running there (a backfill), then groups the
+// rest — same mode, same arena, same build, oldest first — into proposals: eight
 // people at first, fewer the longer the oldest has waited. Everyone in a
 // proposal accepts or declines within the ready check; enough accepts start
 // it (the lobby makes the room and seats them: server/lobby.ts, bots take the
@@ -32,6 +32,7 @@ export interface Ticket {
   id: string
   uid: string // the player: the server's reading of their session, never a field they sent
   mode: string
+  map: string // the arena asked for: only ever played on that one
   build: string // the page's build: tickets of different builds never play together
   status: 'searching' | 'in_proposal' | 'matched' | 'cancelled'
   createdAt: number // ms; a requeue keeps it, so the ticket keeps its place
@@ -42,7 +43,7 @@ export interface Ticket {
 export interface Proposal {
   id: string
   mode: string
-  map: string // the server's choice
+  map: string // the arena its tickets asked for
   uids: string[] // who was asked, oldest ticket first
   accepted: Set<string>
   declined: Set<string>
@@ -65,7 +66,6 @@ export interface Opening {
 
 export interface MatchmakerHooks {
   now(): number // ms
-  arenas(mode: string): readonly string[] // where a new room of the mode may be played
   openings(): readonly Opening[] // the rooms taking newcomers
   capacity(): number // how many more rooms may be opened
   start(proposal: Proposal, uids: string[]): boolean // seats those who accepted (oldest first): a new room, or the backfill's seat; false when it can't now
@@ -74,14 +74,13 @@ export interface MatchmakerHooks {
 }
 
 // Who may play together (pluggable: a rating band, a region, a party would go here).
-export const sameQueue = (a: Ticket, b: Ticket) => a.mode === b.mode && a.build === b.build
+export const sameQueue = (a: Ticket, b: Ticket) => a.mode === b.mode && a.map === b.map && a.build === b.build
 
 export type Matchmaker = ReturnType<typeof createMatchmaker>
 
 export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConfig = MATCHMAKING, compatible: (a: Ticket, b: Ticket) => boolean = sameQueue) {
   const tickets = new Map<string, Ticket>() // by uid, one each, in the order they were made
   const proposals = new Map<string, Proposal>() // in their ready check
-  const turn = new Map<string, number>() // by mode: the arena rotation
   const log = (message: string, fields: Record<string, unknown>) => hooks.log?.(message, fields)
   let serial = 0
 
@@ -92,7 +91,7 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
     if (!t) return { t: 'mm', state: 'idle', ...said }
     const now = hooks.now()
     const p = t.proposal
-    if (!p) return { t: 'mm', state: 'searching', mode: t.mode, waited: now - t.createdAt, ...said }
+    if (!p) return { t: 'mm', state: 'searching', mode: t.mode, map: t.map, waited: now - t.createdAt, ...said }
     return { t: 'mm', state: p.accepted.has(uid) ? 'accepted' : 'found', mode: p.mode, id: p.id, map: p.map, players: p.players, size: p.uids.length, accepted: p.accepted.size, declined: p.declined.size, left: Math.max(0, p.expiresAt - now), of: config.readyCheckMs }
   }
   const tell = (uid: string, note?: QueueNote) => hooks.tell(uid, stateOf(uid, note))
@@ -175,7 +174,7 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
   }
 
   // The oldest searchers first, each offered a bot's seat in a running match
-  // of their mode and build that isn't too far along, the room with the most
+  // of their mode, arena and build that isn't too far along, the room with the most
   // people first. Offers still out count against a room's free seats.
   function backfill(pool: Ticket[], now: number) {
     const offered = new Map<string, number>()
@@ -186,7 +185,7 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
       .map((r) => ({ ...r, free: r.free - (offered.get(r.id) ?? 0), humans: r.humans + (offered.get(r.id) ?? 0) }))
       .sort((a, b) => b.humans - a.humans)
     for (const t of [...pool]) {
-      const room = rooms.find((r) => r.free > 0 && r.mode === t.mode && r.build === t.build)
+      const room = rooms.find((r) => r.free > 0 && r.mode === t.mode && r.map === t.map && r.build === t.build)
       if (!room) continue
       pool.splice(pool.indexOf(t), 1)
       propose([t], room.map, now, room)
@@ -213,28 +212,20 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
         continue
       }
       for (const t of members) pool.splice(pool.indexOf(t), 1)
-      propose(members, arena(oldest.mode), now)
+      propose(members, oldest.map, now)
       rooms--
     }
-  }
-
-  // The server's pick for a new room: the mode's arenas in turn.
-  function arena(mode: string) {
-    const maps = hooks.arenas(mode)
-    const n = turn.get(mode) ?? 0
-    turn.set(mode, n + 1)
-    return maps[n % maps.length]
   }
 
   return {
     // A player starts searching. One ticket a player: asking again (a second
     // click, another tab) is the same ticket, as it stands.
-    search(uid: string, mode: string, build: string) {
+    search(uid: string, mode: string, map: string, build: string) {
       let t = tickets.get(uid)
       if (!t) {
-        t = { id: `t${++serial}`, uid, mode, build, status: 'searching', createdAt: hooks.now() }
+        t = { id: `t${++serial}`, uid, mode, map, build, status: 'searching', createdAt: hooks.now() }
         tickets.set(uid, t)
-        log('ticket created', { ticket: t.id, uid, mode, build })
+        log('ticket created', { ticket: t.id, uid, mode, map, build })
       }
       t.disconnectedAt = undefined // asked over a live connection
       tell(uid)

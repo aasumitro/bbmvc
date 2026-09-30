@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto'
+import RAPIER from '@dimforge/rapier3d-compat'
+import * as THREE from 'three'
 import { botGun, createBrain, DIFFICULTIES } from '../src/game/ai'
-import { armWeapon, WEAPONS } from '../src/game/combat'
+import { armWeapon, WEAPONS, type WeaponId } from '../src/game/combat'
 import type { Loadout } from '../src/game/loadout'
 import type { Arena } from '../src/game/arena/arena'
 import type { MapId } from '../src/game/maps'
@@ -9,8 +11,9 @@ import { createWorld, PHYSICS_STEP } from '../src/game/physics'
 import { botName, recruits } from '../src/game/roster'
 import { createSimulation, enlist, type Combatant } from '../src/game/simulation'
 import { arenaDigest } from '../src/game/arena/digest'
-import { carRow, clampAim, clampView, meRow, PROTOCOL, RATE, statsRow, weaponId, acceptSeq, type ErrorCode, type Input, type ServerMessage } from '../src/net/protocol'
+import { carRow, clampAim, clampView, meRow, packCars, packEvents, packSnapshot, PROTOCOL, RATE, STAT_KEYS, statsRow, weaponId, acceptSeq, type ErrorCode, type Input, type ServerMessage } from '../src/net/protocol'
 import { arenaData } from './arenas'
+import { createFairPlay, type FairFlag, type FairTally, type Point, type Target } from './fairplay'
 import { createRecorder } from './recorder'
 import { createRewind } from './rewind'
 
@@ -26,6 +29,10 @@ import { createRewind } from './rewind'
 // person seated has loaded it — their page's first input — or `hold` runs
 // out: nothing moves meanwhile, and a seat whose page is late is its bot's
 // until it comes (the takeover, as for anyone joining).
+// Every person's aim is watched for signs of aim help (fairplay.ts); each
+// match that ends is written down (`record`), and everything a replay needs
+// to run the room again goes out line by line (`journal`: seats taken and
+// left, each person's input as the room used it, the next match's seed).
 
 export const SKILL = DIFFICULTIES.normal // the bots' online
 const QUEUE = 6 // inputs kept per player; past this the oldest go (latency capped)
@@ -43,15 +50,20 @@ const IDLE = 60_000 // ms without input: the player is let go and a bot takes th
 const SHARE = 12 // steps between checks for a changed rules state
 const NEUTRAL = { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false }
 const STAND_DOWN = { ...NEUTRAL, handbrake: true }
+const EYE = 1.6 // metres over a machine where its page's lock-on looks from: the chase camera's pivot (camera.ts)
+const CAMERA = { back: 8.5, up: 1.7 } // and the camera itself, behind the pivot along the aim and raised
 
 const freshSeed = () => randomBytes(4).readUInt32LE(0)
+// A chat channel's name (Nakama room channels: net/chat.ts, nakama/data/modules/chat.lua):
+// unguessable, since a room channel lets in whoever knows its name.
+const channel = () => `sy-${randomBytes(12).toString('hex')}`
 
 // A person in a seat.
 export interface Human {
   uid: string
   name: string
   seat: number
-  send(text: string): void // a message, serialised
+  send(data: string | Uint8Array): void // a message, serialised: JSON text, or a binary snapshot
   close(code: ErrorCode, text: string): void // let the player go (the socket closes; the lobby frees the seat)
   queue: Input[]
   last: Input | null // repeated while the queue is dry; null until the first: a bot still drives the machine
@@ -64,7 +76,62 @@ export interface Human {
   ack: number // the last seq used on a step
   heardAt: number // ms: when the latest input arrived
   view: number // the tick the player last said it sees (clamped)
+  forced?: Given | null // a replay's: what the seat is given on the next step (null: its bot still drives), in place of the queue
 }
+
+// What a person's machine is given on a step: their input as the room took
+// it, and how: DRIVING (the input), STANDING (the match is over or held:
+// standing down) or COASTING (their input went stale: neutral).
+export const DRIVING = 0
+export const STANDING = 1
+export const COASTING = 2
+export interface Given {
+  kind: typeof DRIVING | typeof STANDING | typeof COASTING
+  input: Pick<Input, 'throttle' | 'steer' | 'handbrake' | 'fire' | 'recover' | 'aim' | 'view'>
+}
+
+// A match that ended, as it's written down (records.ts) and as a replay of
+// the room says it again (replay.ts). Times run on the room's own clock: the
+// time it was made plus its steps.
+export interface MatchRecord {
+  room: string
+  match: number // the room's matches, from 1
+  mode: Mode
+  map: MapId
+  build: string
+  seed: number
+  started: string // ISO
+  ended: string
+  seconds: number
+  winner: number | null // the winning team (free for all: the winner's own), null a draw
+  seats: SeatRecord[]
+}
+
+export interface SeatRecord {
+  seat: number
+  team: number
+  name: string
+  uid: string // the person's; '' a bot's
+  weapon: WeaponId
+  stats: Record<string, number> // STAT_KEYS, rounded as the wire rounds them
+  fairplay?: { tally: FairTally; flags: FairFlag[] } // people only: since they took the seat
+}
+
+// A replay's lines (replay.ts): the room's header, then what happened after
+// step `k` (a seat taken or left), what the people's machines were given on
+// step `k` (only the seats whose given changed: [seat, kind, throttle, steer,
+// handbrake, fire, recover, aim x, y, z, lag] — lag: steps the tick the page
+// saw lies behind `k`, as it sent it; standing down or coasting, just [seat,
+// kind]: the input isn't used), the seed a match started on,
+// the end of match `end`, and the room closing after step `k`.
+export type ReplayLine =
+  | { replay: 1; protocol: number; build: string; room: string; mode: Mode; map: MapId; seed: number; created: number; hold: number; results: number }
+  | { k: number; join: [seat: number, uid: string, name: string, weapon: WeaponId] }
+  | { k: number; leave: number }
+  | { k: number; in: number[][] }
+  | { k: number; go: number }
+  | { k: number; end: number }
+  | { k: number; close: 1 }
 
 // How deep a person's input queue ran, step by step: each queued input is a
 // step (17 ms) more between their keys and their machine, and a step less of
@@ -89,12 +156,17 @@ export interface RoomOptions {
   results?: number // seconds the results stay up before the next match
   arena?: Arena // played on instead of the map's own (the netplay check's test yard)
   log?: (message: string, fields: Record<string, unknown>) => void
+  created?: number // ms since the epoch: the room's clock starts here (a replay's, as recorded)
+  reseed?: () => number // each next match's seed (a replay's, as recorded); fresh from node:crypto otherwise
+  record?: (match: MatchRecord) => void // a match ended
+  journal?: (line: ReplayLine) => void // what a replay needs, as it happens
 }
 
 export type Room = ReturnType<typeof createRoom>
 
-export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: first, results = 15, arena = arenaData(map), log = () => {} }: RoomOptions) {
+export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: first, results = 15, arena = arenaData(map), log = () => {}, created = Date.now(), reseed = freshSeed, record, journal }: RoomOptions) {
   let seed = first ?? freshSeed()
+  journal?.({ replay: 1, protocol: PROTOCOL, build, room: id, mode: kind, map, seed, created, hold, results })
   const digest = arenaDigest(arena)
   const world = createWorld(arena.colliders)
   const combatants = recruits(kind, arena, seed, SKILL).map((recruit, i) => enlist(world, i, recruit))
@@ -103,7 +175,13 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
   const recorder = createRecorder(() => tick)
   const humans: Human[] = []
   const rewind = createRewind(world, combatants)
+  const fairplay = createFairPlay(combatants.length)
   const flags = { compensate: true } // lag compensation for people's hitscan (the netplay check turns it off to compare)
+  // The simulation's events go out to the pages; a person's hit is also the fair-play watch's.
+  const events = { ...recorder.sim, hurt: (victim: Combatant, attacker: Combatant) => {
+    recorder.sim.hurt(victim, attacker)
+    if (attacker !== victim) fairplay.hit(attacker.id, victim.id, tick)
+  } }
   // A person's round meets the others where that person's page drew them;
   // a bot's (a seat's bot too, until its person's first input), or one seen
   // in the present, is cast as it stands.
@@ -112,7 +190,7 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     arena,
     combatants,
     mode,
-    events: recorder.sim,
+    events,
     seed,
     castRound(c, muzzle, shot, random) {
       if (!flags.compensate) return false
@@ -127,9 +205,21 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
   let lastState = ''
   let emptySince = 0 // ms
   const steps = { count: 0, total: 0, max: 0, recent: new Float64Array(3600) } // ms per step, the last minute kept
+  let match = 1 // this room's matches, counted
+  let startTick = 0 // the step this match began on
+  const written = new Map<number, string>() // by seat: the given last put in the journal
+  const clock = (at: number) => new Date(created + (at * 1000) / RATE.step).toISOString()
 
   const send = (to: Human, message: ServerMessage) => to.send(JSON.stringify(message))
-  const lineUp = () => combatants.map((c) => ({ name: c.name, team: c.team, vehicle: c.vehicle, weapon: weaponId(c.weapon.spec), human: humans.some((h) => h.seat === c.id) }))
+  const personAt = (seat: number) => humans.find((h) => h.seat === seat)
+  const lineUp = () => combatants.map((c) => ({ name: c.name, team: c.team, vehicle: c.vehicle, weapon: weaponId(c.weapon.spec), human: !!personAt(c.id), uid: personAt(c.id)?.uid ?? '' }))
+  // The room's chat: one channel for everyone, one per side in team deathmatch.
+  const chat = { all: channel(), teams: new Map<number, string>() }
+  const teamChannel = (team: number) => {
+    if (kind !== 'tdm') return ''
+    if (!chat.teams.has(team)) chat.teams.set(team, channel())
+    return chat.teams.get(team)!
+  }
 
   // --- the step ------------------------------------------------------------------------------
 
@@ -137,7 +227,14 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     tick++
     if (hold >= 0 && (tick >= hold || humans.every((h) => h.last))) release()
     const live = next < 0
-    for (const human of humans) drive(human, now, live && hold < 0)
+    const given: number[][] = []
+    for (const human of humans) {
+      const g = drive(human, now, live && hold < 0)
+      if (!g) continue
+      if (journal) note(human.seat, g, given)
+      if (g.kind === DRIVING) watch(human)
+    }
+    if (given.length) journal?.({ k: tick, in: given })
     if (hold < 0) {
       const started = performance.now()
       sim.step(PHYSICS_STEP, live)
@@ -158,9 +255,17 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
 
   // The seat's next input into its machine's controls (the last one again
   // while none has come); neutral once the input is stale, standing down once
-  // the match is over. Before the page's first input the bot drives on.
-  function drive(human: Human, now: number, live: boolean) {
+  // the match is over. Before the page's first input the bot drives on (null).
+  // A replay gives the seat what the journal says instead of its queue.
+  function drive(human: Human, now: number, live: boolean): Given | null {
     const c = combatants[human.seat]
+    if (human.forced !== undefined) {
+      const forced = human.forced
+      if (!forced) return null
+      if (!human.last) takeWheel(c)
+      human.last = { t: 'in', seq: 0, ...forced.input }
+      return give(human, c, forced)
+    }
     const input = human.queue.shift()
     if (input) {
       if (!human.last) takeWheel(c)
@@ -177,12 +282,61 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     }
     human.depths[human.queue.length]++
     const use = human.last
-    if (!use) return
-    if (!live) return void Object.assign(c.control, STAND_DOWN)
-    if (now - human.heardAt > STALE) return void Object.assign(c.control, NEUTRAL)
-    Object.assign(c.control, { throttle: use.throttle, steer: use.steer, handbrake: use.handbrake, fire: use.fire, recover: use.recover })
-    clampAim(c.control.aim.copy(use.aim), c.position, c.weapon.spec.range)
-    human.view = clampView(use.view, tick)
+    if (!use) return null
+    return give(human, c, { kind: !live ? STANDING : now - human.heardAt > STALE ? COASTING : DRIVING, input: use })
+  }
+
+  function give(human: Human, c: Combatant, given: Given) {
+    const { kind, input } = given
+    if (kind === STANDING) Object.assign(c.control, STAND_DOWN)
+    else if (kind === COASTING) Object.assign(c.control, NEUTRAL)
+    else {
+      Object.assign(c.control, { throttle: input.throttle, steer: input.steer, handbrake: input.handbrake, fire: input.fire, recover: input.recover })
+      clampAim(c.control.aim.copy(input.aim), c.position, c.weapon.spec.range)
+      human.view = clampView(input.view, tick)
+    }
+    return given
+  }
+
+  // The given, into this step's journal line when the seat's has changed. The
+  // view goes as how far it lies behind the step: a page steady on its link
+  // sends the same controls with the same lag, which then needs no line. A
+  // machine standing down or coasting uses none of its input: just the kind.
+  function note(seat: number, { kind, input: i }: Given, into: number[][]) {
+    const row = kind === DRIVING ? [seat, kind, i.throttle, i.steer, +i.handbrake, +i.fire, +i.recover, i.aim.x, i.aim.y, i.aim.z, tick - i.view] : [seat, kind]
+    const text = row.join()
+    if (written.get(seat) === text) return
+    written.set(seat, text)
+    into.push(row)
+  }
+
+  // A person's aim, to the fair-play watch: from the car's roof and from the
+  // chase camera behind it, at the hostiles as their page drew them.
+  const drawn = new THREE.Vector3()
+  const sight = new RAPIER.Ray(new THREE.Vector3(), new THREE.Vector3())
+  const sees = (from: Point, to: Point) => {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const dz = to.z - from.z
+    const length = Math.hypot(dx, dy, dz)
+    if (length < 0.5) return true
+    sight.origin = from
+    sight.dir = { x: dx / length, y: dy / length, z: dz / length }
+    return !world.castRay(sight, length - 0.3, true, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC)
+  }
+  function watch(human: Human) {
+    const c = combatants[human.seat]
+    const { aim } = c.control
+    const roof = { x: c.position.x, y: c.position.y + EYE, z: c.position.z }
+    const across = Math.hypot(aim.x - roof.x, aim.z - roof.z) || 1
+    const camera = { x: roof.x - ((aim.x - roof.x) / across) * CAMERA.back, y: roof.y + CAMERA.up, z: roof.z - ((aim.z - roof.z) / across) * CAMERA.back }
+    const targets: Target[] = []
+    for (const o of combatants) {
+      if (o === c || o.team === c.team || !o.alive) continue
+      if (!rewind.where(o.id, human.view, drawn)) drawn.copy(o.position)
+      targets.push({ id: o.id, x: drawn.x, y: drawn.y, z: drawn.z })
+    }
+    fairplay.observe(human.seat, tick, [roof, camera], aim, c.control.fire, targets, sees)
   }
 
   // The first match goes: everyone's page is in, or the wait is over (a late
@@ -201,16 +355,54 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     steps.max = Math.max(steps.max, ms)
   }
 
-  // The mode has a result: everyone stands down, the results run.
+  // The mode has a result: everyone stands down, the results run; the match is written down.
   function finish() {
     sim.standDown()
     next = tick + results * RATE.step
     changed = true
+    const done = matchRecord()
+    record?.(done)
+    journal?.({ k: tick, end: match })
+    const flagged = done.seats.filter((s) => s.fairplay?.flags.length)
+    log('match ended', { room: id, match, mode: kind, map, winner: done.winner, seconds: done.seconds, humans: humans.length, bots: combatants.length - humans.length, flagged: flagged.length })
+    for (const s of flagged) log('fairplay', { room: id, match, uid: s.uid, name: s.name, flags: s.fairplay!.flags, tally: s.fairplay!.tally })
+  }
+
+  function matchRecord(): MatchRecord {
+    const winner = mode.outcome()
+    return {
+      room: id,
+      match,
+      mode: kind,
+      map,
+      build,
+      seed,
+      started: clock(startTick),
+      ended: clock(tick),
+      seconds: Math.round((tick - startTick) / RATE.step),
+      winner: winner ?? null,
+      seats: combatants.map((c) => {
+        const person = personAt(c.id)
+        const row = statsRow(c.stats)
+        return {
+          seat: c.id,
+          team: c.team,
+          name: c.name,
+          uid: person?.uid ?? '',
+          weapon: weaponId(c.weapon.spec),
+          stats: Object.fromEntries(STAT_KEYS.map((key, i) => [key, row[i]])),
+          ...(person && { fairplay: fairplay.summary(c.id) }),
+        }
+      }),
+    }
   }
 
   // The next match, on the same arena and machines, with a fresh seed.
   function restart() {
-    seed = freshSeed()
+    seed = reseed()
+    journal?.({ k: tick, go: seed })
+    match++
+    startTick = tick
     recorder.restart(seed)
     sim.restart(seed)
     mode.restart(seed)
@@ -220,13 +412,15 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
 
   // --- what everyone is told -------------------------------------------------------------------
 
-  // The snapshot: the machines and the events since the last one, written
-  // once and wrapped with each player's own ack and machine.
+  // The snapshot, a binary frame: the machines and the events since the
+  // last one, packed once and wrapped with each player's own ack and machine.
   function broadcast() {
     const events = recorder.drain()
     if (!humans.length) return
-    const shared = `"k":${tick},"now":${Math.round(mode.rules.now * 1000)},"cars":${JSON.stringify(combatants.map(carRow))},"ev":${JSON.stringify(events)}`
-    for (const human of humans) human.send(`{"t":"s","ack":${human.ack},"me":${JSON.stringify(meRow(combatants[human.seat]))},${shared}}`)
+    const cars = packCars(combatants.map(carRow))
+    const packed = packEvents(events)
+    const now = Math.round(mode.rules.now * 1000)
+    for (const human of humans) human.send(packSnapshot(tick, human.ack, now, cars, meRow(combatants[human.seat]), packed))
     if (changed || tick - sharedAt >= SHARE) share()
   }
 
@@ -275,9 +469,12 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     c.name = person.name
     const human: Human = { uid: person.uid, name: person.name, seat, send: person.send, close: person.close, queue: [], last: null, repeats: 0, drops: 0, depths: new Array<number>(QUEUE + 1).fill(0), low: Infinity, window: 0, seq: -1, ack: -1, heardAt: now, view: tick }
     humans.push(human)
-    send(human, { t: 'welcome', v: PROTOCOL, room: id, seat, mode: kind, map, seed, tick, rate: RATE, digest, lineUp: lineUp() })
+    fairplay.reset(seat)
+    written.delete(seat)
+    journal?.({ k: tick, join: [seat, person.uid, person.name, person.loadout.weapon] })
+    send(human, { t: 'welcome', v: PROTOCOL, room: id, seat, mode: kind, map, seed, tick, rate: RATE, digest, lineUp: lineUp(), chat: { all: chat.all, team: teamChannel(c.team) } })
     share(human)
-    for (const other of humans) if (other !== human) send(other, { t: 'ro', seat, name: c.name, human: true, weapon: weaponId(c.weapon.spec) })
+    for (const other of humans) if (other !== human) send(other, { t: 'ro', seat, name: c.name, human: true, weapon: weaponId(c.weapon.spec), uid: human.uid })
     return human
   }
 
@@ -293,11 +490,14 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     const at = humans.indexOf(human)
     if (at < 0) return
     humans.splice(at, 1)
+    journal?.({ k: tick, leave: human.seat })
+    const watched = fairplay.summary(human.seat)
+    if (watched.flags.length) log('fairplay', { room: id, match, uid: human.uid, name: human.name, left: true, flags: watched.flags, tally: watched.tally })
     const c = combatants[human.seat]
     c.brain = createBrain(c.seed, SKILL)
     c.weapon = armWeapon(botGun(WEAPONS[weaponId(c.weapon.spec)], SKILL))
     c.name = botName(c.id)
-    for (const other of humans) send(other, { t: 'ro', seat: c.id, name: c.name, human: false, weapon: weaponId(c.weapon.spec) })
+    for (const other of humans) send(other, { t: 'ro', seat: c.id, name: c.name, human: false, weapon: weaponId(c.weapon.spec), uid: '' })
     if (!humans.length) emptySince = now
   }
 
@@ -351,7 +551,15 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     join,
     leave,
     input,
+    // A replay's: what `human`'s machine is given on the next step (null: its bot still drives).
+    force(human: Human, given: Given | null) {
+      human.forced = given
+    },
+    get match() {
+      return match
+    },
     dispose() {
+      journal?.({ k: tick, close: 1 })
       mode.dispose()
       world.free()
     },

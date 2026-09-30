@@ -1,5 +1,5 @@
 import type { Loadout } from '../game/loadout'
-import { BUILD, PROTOCOL, type ErrorCode, type ServerMessage, type Welcome } from './protocol'
+import { BUILD, PROTOCOL, readServer, type ErrorCode, type ServerMessage, type Welcome } from './protocol'
 
 // The browser's end of the match socket: open it, say hello with the
 // player's session, wait for a seat (or the reason there isn't one), then
@@ -32,9 +32,11 @@ export function gameServerUrl() {
 }
 
 // A socket that opened. `origin`: sent by Node only (a browser sends its page's).
+// Binary frames (the snapshots) arrive as ArrayBuffers.
 export function openSocket(url: string, origin?: string) {
   return new Promise<WebSocket>((resolve, reject) => {
     const socket = origin ? new WebSocket(url, { headers: { Origin: origin } } as unknown as string[]) : new WebSocket(url)
+    socket.binaryType = 'arraybuffer'
     const timer = setTimeout(() => fail(), TIMEOUT)
     function fail() {
       clearTimeout(timer)
@@ -77,7 +79,7 @@ export function join(socket: WebSocket, hello: Hello & { mode: string; map: stri
       reject(new NetError(reason))
     }
     socket.onmessage = (e) => {
-      const message = JSON.parse(String(e.data)) as ServerMessage
+      const message = readServer(e.data)
       if (message.t === 'err') return refuse(reasonFor(message.code, message.text))
       if (message.t !== 'welcome') return
       clearTimeout(timer)
@@ -98,7 +100,7 @@ export function link(socket: WebSocket, welcome: Welcome) {
   const ping = setInterval(() => socket.readyState === socket.OPEN && socket.send(JSON.stringify({ t: 'ping', c: performance.now() })), PING)
 
   socket.onmessage = (e) => {
-    const message = JSON.parse(String(e.data)) as ServerMessage
+    const message = readServer(e.data)
     if (message.t === 'pong') {
       status.rtt = performance.now() - message.c
       return pong?.(message.k, performance.now())

@@ -171,6 +171,7 @@ jobs:
           get "$SITE/play"
           get "$NAKAMA_URL/healthcheck"
           node scripts/nakama-smoke.mjs
+          node scripts/chat-smoke.mjs # the match chat's rules (nakama/data/modules/chat.lua)
           get "$SITE/api/stats" # Caddy reaches Nakama with the HTTP key
           # a guest takes a seat in an online match at /match (the game server behind Caddy); a few tries while it restarts
           for try in 1 2 3 4 5; do node scripts/match-smoke.mjs && break; [ "$try" = 5 ] && exit 1; sleep 5; done

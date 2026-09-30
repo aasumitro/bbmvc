@@ -6,7 +6,7 @@
 // match and the next one, that a room is the practice simulation and nothing
 // more, and what it all costs (bytes a player, milliseconds a step) on both
 // real arenas. Bundled: npm run server:check.
-import { rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { request } from 'node:http'
 import type { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -22,11 +22,13 @@ import { BOT_VEHICLE, recruits } from '../src/game/roster'
 import { createSimulation, enlist, type Combatant } from '../src/game/simulation'
 import { placeCar } from '../src/game/vehicle/drive'
 import { VEHICLES } from '../src/game/vehicle/vehicles'
-import { AIM_MARGIN, BUILD, inputMessage, parseClient, PROTOCOL, readCar, type ServerMessage, type Snapshot, type Welcome } from '../src/net/protocol'
+import { AIM_MARGIN, BUILD, inputMessage, parseClient, PROTOCOL, readCar, readServer, STAT_KEYS, wireSize, type ServerMessage, type Snapshot, type Welcome } from '../src/net/protocol'
 import { arenaData } from './arenas'
 import { mintToken } from './auth'
 import { createRecorder } from './recorder'
-import { createRoom, SKILL, type Room } from './room'
+import { createRecords } from './records'
+import { replay, replayLines } from './replay'
+import { createRoom, SKILL, type Human, type MatchRecord, type Room } from './room'
 import { createGameServer } from './server'
 
 await initPhysics()
@@ -67,7 +69,8 @@ function probe(origin = ORIGIN, at = port) {
   const inbox: ServerMessage[] = []
   let closed: { code: number; reason: string } | null = null
   let seq = 0
-  ws.onmessage = (e) => inbox.push(JSON.parse(String(e.data)))
+  ws.binaryType = 'arraybuffer'
+  ws.onmessage = (e) => inbox.push(readServer(e.data))
   ws.onclose = (e) => (closed = { code: e.code, reason: e.reason })
   const p = {
     ws,
@@ -204,8 +207,14 @@ const b = await player('u-b')
   check(wa.seat === 0 && wb.seat === 4 && room.combatants[wb.seat].team !== room.combatants[wa.seat].team, 'the second player goes to the side with fewer players')
   check(wb.lineUp.filter((s) => !s.human).length === 6 && room.combatants.filter((c) => c.id !== wa.seat && c.id !== wb.seat).every((c) => !room.humans.some((h) => h.seat === c.id)), 'bots hold the other six seats')
   check(!!a.last('st') && a.of('ro').some((r) => r.seat === wb.seat && r.human), 'the state follows the welcome; the others hear of a new player')
+  const name = /^sy-[0-9a-f]{24}$/ // chat.lua lets in only these
+  check(name.test(wa.chat.all) && wa.chat.all === wb.chat.all, 'the welcome names the room’s chat channel, the same for everyone in it, unguessable')
+  check(name.test(wa.chat.team) && name.test(wb.chat.team) && wa.chat.team !== wb.chat.team && wa.chat.team !== wa.chat.all, 'team deathmatch: each side its own team channel, told only to its own seats')
+  check(wb.lineUp[wa.seat].uid === 'u-a' && wb.lineUp[wb.seat].uid === 'u-b' && wb.lineUp.filter((s) => !s.human).every((s) => s.uid === ''), 'the line-up gives each person’s user id (a whisper’s address), none for a bot')
+  check(a.of('ro').some((r) => r.seat === wb.seat && r.human && r.uid === 'u-b'), 'a seat changing hands says whose it is now')
   const other = await player('u-other', { mode: 'ffa', map: 'city' })
   check(welcomeOf(other).room !== wa.room && welcomeOf(other).lineUp.length === 8, 'another mode and arena is another room')
+  check(name.test(welcomeOf(other).chat.all) && welcomeOf(other).chat.all !== wa.chat.all && welcomeOf(other).chat.team === '', 'another room, another chat channel; free for all has no team channel')
   other.ws.close()
   const elsewhere = await player('u-elsewhere', { map: 'city' })
   check(welcomeOf(elsewhere).room !== wa.room && welcomeOf(elsewhere).map === 'city', 'a seat at once is on the arena asked for: the same mode on another arena is another room')
@@ -411,7 +420,7 @@ async function session(uid: string) {
   return p
 }
 const said = (p: Probe) => p.last('mm')
-const searchFor = (p: Probe, mode = 'ffa') => p.send({ t: 'mm', do: 'search', mode })
+const searchFor = (p: Probe, mode = 'ffa', map = 'city') => p.send({ t: 'mm', do: 'search', mode, map })
 
 {
   const s1 = await session('q-1')
@@ -420,7 +429,7 @@ const searchFor = (p: Probe, mode = 'ffa') => p.send({ t: 'mm', do: 'search', mo
   searchFor(s1)
   await until(() => said(s1)?.state === 'searching', 1000, 'the search')
   const ticket = mm.ticketOf('q-1')
-  check(ticket?.status === 'searching' && ticket.mode === 'ffa' && ticket.build === BUILD, 'Find Match: a ticket in the player’s mode and build, and they hear they are searching')
+  check(ticket?.status === 'searching' && ticket.mode === 'ffa' && ticket.map === 'city' && ticket.build === BUILD, 'Find Match: a ticket in the player’s mode, arena and build, and they hear they are searching')
 
   const s1b = await session('q-1')
   await until(() => !!s1.closed() && said(s1b)?.state === 'searching', 1000, 'the second tab to take over')
@@ -444,10 +453,11 @@ const searchFor = (p: Probe, mode = 'ffa') => p.send({ t: 'mm', do: 'search', mo
   direct.ws.close()
 
   const junk = await session('q-3')
-  junk.send({ t: 'mm', do: 'search', mode: 'derby' })
+  junk.send({ t: 'mm', do: 'search', mode: 'derby', map: 'city' })
+  junk.send({ t: 'mm', do: 'search', mode: 'ffa', map: 'moon' })
   junk.send({ t: 'mm', do: 'dance' })
   await wait(100)
-  check(!mm.ticketOf('q-3') && !junk.closed(), 'a search for a mode that isn’t one, or an action that isn’t, is a strike, not a ticket')
+  check(!mm.ticketOf('q-3') && !junk.closed(), 'a search for a mode or an arena that isn’t one, or an action that isn’t, is a strike, not a ticket')
   junk.ws.close()
 
   const [a, b] = [await session('q-a'), await session('q-b')]
@@ -455,7 +465,7 @@ const searchFor = (p: Probe, mode = 'ffa') => p.send({ t: 'mm', do: 'search', mo
   searchFor(b)
   await until(() => said(a)?.state === 'found' && said(b)?.state === 'found', 2000, 'a match found')
   const found = said(a)!
-  check(found.state === 'found' && found.size === 2 && found.players === 2 && found.left > 0 && found.of === WINDOWS.readyCheckMs && ['scrapyard', 'city'].includes(found.map), `two searchers meet once the oldest has waited long enough: both hear it, the server’s arena (${found.state === 'found' && found.map})`)
+  check(found.state === 'found' && found.size === 2 && found.players === 2 && found.left > 0 && found.of === WINDOWS.readyCheckMs && found.map === 'city', `two searchers meet once the oldest has waited long enough: both hear it, on the arena they searched for (${found.state === 'found' && found.map})`)
   const id = found.state === 'found' ? found.id : ''
   a.send({ t: 'mm', do: 'accept', id })
   await until(() => said(a)?.state === 'accepted' && said(b)?.state === 'found' && (said(b) as { accepted: number }).accepted === 1, 1000, 'the accept, heard by both')
@@ -570,7 +580,7 @@ await queue.close()
     new Promise<{ ws: WsClient; inbox: ServerMessage[] }>((resolve, reject) => {
       const ws = new WsClient(`ws+unix:${path}:/match`, { headers: { Origin: ORIGIN } })
       const inbox: ServerMessage[] = []
-      ws.on('message', (data) => inbox.push(JSON.parse(String(data))))
+      ws.on('message', (data, binary) => inbox.push(readServer(binary ? (data as Buffer) : String(data))))
       ws.on('error', reject)
       ws.on('open', () => {
         ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL, build: BUILD, token: token(uid), mode: 'ffa', map: 'scrapyard', loadout: { vehicle: 'razor', weapon: 'minigun' } }))
@@ -634,6 +644,82 @@ for (const [kind, map] of [['ffa', 'scrapyard'], ['tdm', 'city']] as const) {
   r.dispose()
 }
 
+// --- what a room keeps: its match records, and a replay that runs it again ------------------------------------
+
+// A team deathmatch room keeping its journal on disk (records.ts). People
+// come and go: one plays from the start, firing at the nearest hostile; a
+// second takes a seat mid-match and sends nothing for two seconds (its bot
+// drives); the first goes quiet for a second (its machine coasts), then
+// leaves; a third comes. The match runs to its end and into the next. Run
+// again from the file (replay.ts), every machine ends where the room's did,
+// and each match record comes out the same, fair-play counts and all.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'scrapyard-records-'))
+  mkdirSync(join(dir, 'replays', '2000-01-01'), { recursive: true }) // past any REPLAY_DAYS: pruned
+  const kept = createRecords({ dir, days: 14, log: () => {} })
+  const created = Date.UTC(2026, 8, 29, 12)
+  const file = kept.replay('journal', created)
+  const recorded: MatchRecord[] = []
+  const r = createRoom({ id: 'journal', mode: 'tdm', map: 'city', seed: 777, created, results: 2, journal: file.write, record: (m) => (recorded.push(m), kept.match(m)) })
+  const at = (k: number) => k * 1000 * PHYSICS_STEP
+  const people = new Map<string, Human>()
+  const come = (uid: string, weapon: 'minigun' | 'rocketPod') => void people.set(uid, r.join({ uid, name: uid, loadout: { vehicle: 'razor', weapon }, send() {}, close() {} }, at(r.tick))!)
+  const leave = (uid: string) => {
+    r.leave(people.get(uid)!, at(r.tick))
+    people.delete(uid)
+  }
+  let seq = 0
+  function drive(uid: string) {
+    const h = people.get(uid)!
+    const me = r.combatants[h.seat]
+    const foe = r.combatants.filter((c) => c.team !== me.team && c.alive).sort((x, y) => x.position.distanceTo(me.position) - y.position.distanceTo(me.position))[0]
+    const aim = foe ? { x: foe.position.x, y: foe.position.y + 1, z: foe.position.z } : { x: me.position.x, y: 1, z: me.position.z + 30 }
+    const parsed = parseClient(inputMessage(++seq, { throttle: 1, steer: Math.sin(r.tick / 70 + h.seat), handbrake: r.tick % 240 < 15, fire: true, recover: false, aim }, r.tick - 3))
+    if (parsed.ok && parsed.message.t === 'in') r.input(h, parsed.message, at(r.tick))
+  }
+  const run = (seconds: number, driving: string[]) => {
+    for (let n = 0; n < seconds * 60; n++) {
+      for (const uid of driving) drive(uid)
+      r.step(at(r.tick + 1))
+    }
+  }
+  come('j-one', 'minigun')
+  run(3 + 20, ['j-one'])
+  come('j-two', 'rocketPod')
+  run(2, ['j-one'])
+  run(10, ['j-one', 'j-two'])
+  run(1, ['j-two'])
+  leave('j-one')
+  run(5, ['j-two'])
+  come('j-three', 'minigun')
+  for (let n = 0; r.match < 2; n++) {
+    if (n > 60 * 900) throw new Error('server: the journal room’s match never ended')
+    run(1 / 60, ['j-two', 'j-three'])
+  }
+  run(3, ['j-two', 'j-three']) // into the next match
+  const ended = fingerprint(r.combatants)
+  const steps = r.tick
+  r.dispose()
+  await file.end()
+  const [first] = recorded
+  const person = (uid: string) => first.seats.find((s) => s.uid === uid)
+  check(recorded.length === 1 && first.room === 'journal' && first.match === 1 && first.mode === 'tdm' && first.map === 'city' && first.seed === 777 && first.started === '2026-09-29T12:00:00.000Z', 'a match that ends is recorded: its room, mode, arena and seed, on the room’s clock')
+  check(first.seats.length === 8 && first.seats.every((s) => STAT_KEYS.every((key) => typeof s.stats[key] === 'number')) && (first.winner === null || [0, 1].includes(first.winner)), 'every seat’s statistics, and the result')
+  check(!!person('j-two')?.fairplay && !!person('j-three')?.fairplay && !person('j-one') && first.seats.filter((s) => !s.uid).every((s) => !s.fairplay), 'the people seated at the end, with their fair-play counts; bots (and whoever left) without')
+  check((person('j-two')?.fairplay?.tally.steps ?? 0) > 60 * 30 && (person('j-two')?.fairplay?.tally.hits ?? 0) > 0, `the fair-play watch saw them play (${JSON.stringify(person('j-two')?.fairplay?.tally)})`)
+  await until(() => existsSync(join(dir, 'matches-2026-09.jsonl')) && readFileSync(join(dir, 'matches-2026-09.jsonl'), 'utf8').endsWith('\n'), 2000, 'the match record on disk')
+  check(readFileSync(join(dir, 'matches-2026-09.jsonl'), 'utf8') === `${JSON.stringify(first)}\n`, 'the record is one JSON line in the month’s file')
+  const again = await replay(replayLines(file.path))
+  check(again.steps === steps && fingerprint(again.room.combatants) === ended, `the replay runs the room again, ${steps} steps (${(steps / 3600).toFixed(1)} min, people coming and going), to exactly where it ended`)
+  check(JSON.stringify(again.records) === JSON.stringify(recorded), 'and says the same match record, fair-play counts and all')
+  again.room.dispose()
+  await until(() => !existsSync(join(dir, 'replays', '2000-01-01')), 2000, 'the old replays to be pruned')
+  check(true, 'replays older than REPLAY_DAYS are deleted')
+  console.log(`journal: ${(statSync(file.path).size / 1024).toFixed(0)} KB gzipped for ${(steps / 3600).toFixed(1)} min of a room with 1–2 people firing`)
+  kept.close()
+  rmSync(dir, { recursive: true, force: true })
+}
+
 // --- a newcomer's seat: the bot drives it until the page's first input ----------------------------------------
 
 // A page still builds its match and compiles its shaders after the welcome
@@ -652,15 +738,15 @@ for (const [kind, map] of [['ffa', 'scrapyard'], ['tdm', 'city']] as const) {
     }
   }
   run(3 + 10) // the countdown, then ten seconds of fighting
-  const heard: string[] = []
+  const heard: ServerMessage[] = []
   const closed: string[] = []
-  const person = (uid: string) => r.join({ uid, name: uid, loadout: { vehicle: 'razor', weapon: 'minigun' }, send: (text) => void heard.push(text), close: (code) => void closed.push(`${uid} ${code}`) }, at(k))!
+  const person = (uid: string) => r.join({ uid, name: uid, loadout: { vehicle: 'razor', weapon: 'minigun' }, send: (data) => void heard.push(readServer(data)), close: (code) => void closed.push(`${uid} ${code}`) }, at(k))!
   const late = person('late')
   const quiet = person('quiet')
   const c = r.combatants[late.seat]
   const from = c.position.clone()
   run(8)
-  const fired = heard.filter((text) => text.startsWith('{"t":"s"')).some((text) => (JSON.parse(text) as Snapshot).ev.some((e) => (e[0] === 'sh' || e[0] === 'ln') && e[2] === c.id))
+  const fired = heard.some((m) => m.t === 's' && m.ev.some((e) => (e[0] === 'sh' || e[0] === 'ln') && e[2] === c.id))
   const moved = c.position.distanceTo(from)
   check(!!c.brain && moved > 10 && fired && c.name === 'late' && c.weapon.spec.damage < WEAPONS.minigun.damage, `a seat taken mid-match is the bot’s until the page’s first input: 8 s on it has driven ${moved.toFixed(0)} m and fired, under the newcomer’s name, with a bot’s copy of their gun`)
   console.log(`handover: a seat taken mid-match, no input for 8 s: the bot drove it ${moved.toFixed(0)} m and fired`)
@@ -693,8 +779,8 @@ for (const [kind, map] of [['ffa', 'scrapyard'], ['tdm', 'city']] as const) {
     c.brain = undefined
     Object.assign(c.control, { throttle: 0, steer: 0, handbrake: true, fire: false })
   }
-  const heard: string[] = []
-  const hunter = r.join({ uid: 'hunter', name: 'hunter', loadout: { vehicle: 'razor', weapon: 'minigun' }, send: (text) => void heard.push(text), close() {} }, 0)!
+  const heard: ServerMessage[] = []
+  const hunter = r.join({ uid: 'hunter', name: 'hunter', loadout: { vehicle: 'razor', weapon: 'minigun' }, send: (data) => void heard.push(readServer(data)), close() {} }, 0)!
   const me = r.combatants[hunter.seat]
   const foe = r.combatants.find((c) => c.team !== me.team)!
   const nav = r.arena.nav
@@ -716,7 +802,7 @@ for (const [kind, map] of [['ffa', 'scrapyard'], ['tdm', 'city']] as const) {
   for (const c of r.combatants) if (c !== me && c !== foe) placeCar(c.car, { x: 400, y: 0, z: 300 - c.id * 12 }, 0)
   placeCar(me.car, nav.nodes[i], facing(i, j))
   steps(150) // past everyone's start protection
-  const rounds = () => heard.filter((text) => text.startsWith('{"t":"s"')).flatMap((text) => (JSON.parse(text) as Snapshot).ev).filter((e) => e[0] === 'sh' && e[2] === me.id)
+  const rounds = () => heard.flatMap((m) => (m.t === 's' ? m.ev : [])).filter((e) => e[0] === 'sh' && e[2] === me.id)
   const then = new THREE.Vector3()
   // One round, rewound to `tick`, aimed where the foe stood then: the event it made, if it went there.
   const fireAt = (tick: number) => {
@@ -775,11 +861,11 @@ for (const map of Object.keys(MAPS) as MapId[]) {
   const sent = [0, 1].map(() => ({ bytes: 0, snapshots: [] as number[], perSecond: new Map<number, number>() }))
   let ms = 0
   const people = sent.map((tally, n) =>
-    r.join({ uid: `budget-${n}`, name: `P${n}`, loadout: { vehicle: 'razor', weapon: n ? 'rocketPod' : 'minigun' }, close() {}, send(text) {
-      tally.bytes += text.length
+    r.join({ uid: `budget-${n}`, name: `P${n}`, loadout: { vehicle: 'razor', weapon: n ? 'rocketPod' : 'minigun' }, close() {}, send(data) {
+      tally.bytes += wireSize(data)
       const second = Math.floor(ms / 1000)
-      tally.perSecond.set(second, (tally.perSecond.get(second) ?? 0) + text.length)
-      if (text.startsWith('{"t":"s"')) tally.snapshots.push(text.length)
+      tally.perSecond.set(second, (tally.perSecond.get(second) ?? 0) + wireSize(data))
+      if (typeof data !== 'string') tally.snapshots.push(data.byteLength) // the snapshots are the binary frames
     } }, 0)!,
   )
   let upBytes = 0

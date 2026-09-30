@@ -19,6 +19,7 @@ export function createInput(surface: HTMLElement) {
   const locked = () => document.pointerLockElement === surface
 
   const onKeyDown = (e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement && e.target.type === 'text') return // typed into a text box (the match chat): never driving
     keys.add(e.code)
     if (e.code === 'Space' && !(e.target instanceof HTMLInputElement)) e.preventDefault() // the handbrake mustn't press a focused button; settings sliders keep their keys
   }

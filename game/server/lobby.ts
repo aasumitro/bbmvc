@@ -1,14 +1,16 @@
 import { randomBytes } from 'node:crypto'
 import type { Arena } from '../src/game/arena/arena'
 import type { Loadout } from '../src/game/loadout'
-import { MAPS, mapsFor, type MapId } from '../src/game/maps'
+import { MAPS, type MapId } from '../src/game/maps'
 import { MODES, type Mode } from '../src/game/modes'
 import { RATE, type ErrorCode, type Queueing } from '../src/net/protocol'
 import { createMatchmaker, MATCHMAKING, type MatchmakingConfig, type Proposal } from './matchmaker'
+import type { Records } from './records'
 import { createRoom, type Human, type Room } from './room'
 
 // Every room on the server, and who goes where. Classic is matchmaking: a
-// page opens a session (a hello with no map), searches for a mode, and the
+// page opens a session (a hello with no map), searches for a mode on an
+// arena, and the
 // matcher (matchmaker.ts) finds it people and a room — a new one, or a bot's
 // seat in one already playing — where the lobby seats it on the same socket.
 // A room made for a proposal waits for its people's pages to load before its
@@ -28,6 +30,7 @@ export interface LobbyOptions {
   arenaFor?: (map: MapId) => Arena // what a room on `map` is played on (the netplay check's test yards); the map's own otherwise
   matchmaking?: Partial<MatchmakingConfig> // the checks' shorter windows
   log?: (message: string, fields?: Record<string, unknown>) => void
+  records?: Records // where finished matches and rooms' replays are kept (MATCH_DIR); none: nothing is kept
 }
 
 // A player seated at once (a hello with a mode and an arena).
@@ -60,8 +63,9 @@ const IDLE = 60_000 // ms a session may go without a ticket before it's let go
 
 export type Lobby = ReturnType<typeof createLobby>
 
-export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, matchmaking, log = () => {} }: LobbyOptions) {
+export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, matchmaking, log = () => {}, records }: LobbyOptions) {
   const rooms: Room[] = []
+  const replays = new Map<Room, ReturnType<Records['replay']>>() // each room's, open while it runs
   const seated = new Map<string, { room: Room; human: Human }>() // by user id
   const searchers = new Map<string, Searcher>() // by user id
   let time = 0 // ms: the latest the lobby was told; the matcher's clock
@@ -69,7 +73,6 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
   const mm = createMatchmaker(
     {
       now: () => time,
-      arenas: (mode) => mapsFor(mode as Mode),
       openings: () => rooms.filter((r) => r.open()).map((r) => ({ id: r.id, mode: r.kind, map: r.map, build: r.build, free: r.free(), humans: r.humans.length, progress: r.progress() })),
       capacity: () => maxRooms - rooms.length,
       start,
@@ -80,9 +83,21 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
   )
 
   function open(mode: Mode, map: MapId, build: string, hold = -1) {
-    const room = createRoom({ id: randomBytes(3).toString('hex'), mode, map, build, hold, results, arena: arenaFor?.(map), log })
+    const id = randomBytes(3).toString('hex')
+    const created = Date.now()
+    const replay = records?.replay(id, created)
+    const room = createRoom({ id, mode, map, build, hold, results, arena: arenaFor?.(map), log, created, record: records?.match, journal: replay?.write })
     rooms.push(room)
+    if (replay) replays.set(room, replay)
     return room
+  }
+
+  // A room is done: its world freed, its replay closed (resolves once the file is on disk).
+  function close(room: Room) {
+    room.dispose()
+    const replay = replays.get(room)
+    replays.delete(room)
+    return replay?.end() ?? Promise.resolve()
   }
 
   // A proposal that started: its people seated, oldest ticket first, on the
@@ -162,8 +177,8 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
       const { uid } = searcher
       if (searchers.get(uid) !== searcher) return true // let go already: its word no longer counts
       if (message.do === 'search') {
-        if (!Object.hasOwn(MODES, message.mode) || !mapsFor(message.mode as Mode).length) return false
-        mm.search(uid, message.mode, searcher.build)
+        if (!hosts(message.mode, message.map)) return false
+        mm.search(uid, message.mode, message.map, searcher.build)
       } else if (message.do === 'cancel') mm.cancel(uid)
       else if (message.do === 'state') mm.tell(uid)
       else mm.respond(uid, message.id, message.do === 'accept')
@@ -190,18 +205,20 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
         const room = rooms[i]
         if (room.humans.length || now - room.emptySince < grace) continue
         rooms.splice(i, 1)
-        room.dispose()
+        void close(room)
         log('room closed', { room: room.id, rooms: rooms.length })
       }
     },
     humans: () => rooms.reduce((sum, room) => sum + room.humans.length, 0),
     searching: () => mm.searching(),
     matchmaker: mm,
+    // Every room closed; resolves once their replays are on disk.
     dispose() {
-      for (const room of rooms) room.dispose()
+      const closing = rooms.map(close)
       rooms.length = 0
       seated.clear()
       searchers.clear()
+      return Promise.all(closing)
     },
   }
 }

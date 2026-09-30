@@ -98,4 +98,4 @@ Paths under `game/` unless noted.
 - **Identity.** One live connection per uid. A session replaces an older
   session of the same uid (the ticket carries over); a session is refused
   while the uid holds a seat (`busy`). A direct seat replaces anything.
-- **Arena.** Rotation per mode over `mapsFor(mode)`.
+- **Arena.** The one the player picked: a search carries `map`, tickets group only with the same mode and arena, backfill only into rooms on it (was: rotation per mode over `mapsFor(mode)`, dropped 2026-09-29; see MM_LOG).

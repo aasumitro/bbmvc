@@ -5,10 +5,11 @@ import type { Arena } from '../src/game/arena/arena'
 import type { MapId } from '../src/game/maps'
 import { PHYSICS_STEP } from '../src/game/physics'
 import { createRng } from '../src/game/rng'
-import { BUILD, LIMITS, parseClient, PROTOCOL, type ErrorCode, type Hello, type ServerMessage } from '../src/net/protocol'
+import { BUILD, LIMITS, parseClient, PROTOCOL, wireSize, type ErrorCode, type Hello, type ServerMessage } from '../src/net/protocol'
 import { playerName, verifyToken } from './auth'
 import { createLobby, type Searcher } from './lobby'
 import type { MatchmakingConfig } from './matchmaker'
+import { createRecords } from './records'
 import { queueDepth, type Human, type Room } from './room'
 
 // The game server: HTTP for its health, a WebSocket per player at /match,
@@ -41,6 +42,7 @@ export interface ServerOptions {
   arenaFor?: (map: MapId) => Arena // the checks' test yards
   matchmaking?: Partial<MatchmakingConfig> // the checks' shorter windows
   log?: (line: Record<string, unknown>) => void
+  records?: { dir: string; days: number } // keep every match's record and each room's replay there (records.ts); none: nothing is kept
 }
 
 const RATE = { perSecond: 120, burst: 240 } // messages; a client sends ~61 a second
@@ -63,7 +65,8 @@ export function originAllowed(origin: string | undefined, allowed: readonly stri
 export function createGameServer(options: ServerOptions) {
   const { key, origins, maxRooms, trustProxy = false, lag = 0, jitter = 0, perAddress = 8, hello: helloWait = 5000, backlog = BACKLOG, build = BUILD, strict = false } = options
   const log = (msg: string, fields: Record<string, unknown> = {}) => (options.log ?? ((line) => console.log(JSON.stringify(line))))({ time: new Date().toISOString(), msg, ...fields })
-  const lobby = createLobby({ maxRooms, grace: options.grace, results: options.results, arenaFor: options.arenaFor, matchmaking: options.matchmaking, log })
+  const records = options.records && createRecords({ ...options.records, log })
+  const lobby = createLobby({ maxRooms, grace: options.grace, results: options.results, arenaFor: options.arenaFor, matchmaking: options.matchmaking, log, records })
   const wobble = createRng(0x51ed) // the jitter (network conditions, not gameplay)
   const delayed = lag > 0 || jitter > 0 || !!options.stall
 
@@ -143,9 +146,9 @@ export function createGameServer(options: ServerOptions) {
     // and the socket's close hands the seat back to a bot. Snapshots are never
     // skipped to help a page catch up: they carry events (wrecks, respawns,
     // the rules', the next match) the page's mirror can't do without.
-    function write(text: string) {
+    function write(data: string | Uint8Array) {
       if (ws.readyState !== ws.OPEN) return
-      ws.send(text)
+      ws.send(data)
       if (ws.bufferedAmount <= backlog) return
       log('slow', { uid, ip, queuedKB: Math.round(ws.bufferedAmount / 1024), seconds: Math.round((performance.now() - opened) / 1000) })
       closing = true
@@ -153,10 +156,10 @@ export function createGameServer(options: ServerOptions) {
     }
     const out = held(write)
 
-    const send = (text: string) => {
-      bytes += text.length
-      if (delayed) out(text)
-      else write(text)
+    const send = (data: string | Uint8Array) => {
+      bytes += wireSize(data)
+      if (delayed) out(data)
+      else write(data)
     }
     const tell = (message: ServerMessage) => send(JSON.stringify(message))
 
@@ -220,7 +223,7 @@ export function createGameServer(options: ServerOptions) {
       if (binary) return strike('binary')
       const raw = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as ArrayBuffer)
       const parsed = parseClient(raw.toString('utf8'), raw.length)
-      if (!parsed.ok) return strike(parsed.error)
+      if (parsed.ok === false) return strike(parsed.error) // `=== false` narrows under any strictness (an editor on an older TypeScript isn't strict by default)
       const message = parsed.message
       if (!greeted) return message.t === 'hello' ? greet(message) : fail('bad-request', 'Say hello first')
       switch (message.t) {
@@ -293,15 +296,15 @@ export function createGameServer(options: ServerOptions) {
         }),
       )
     },
-    // Everyone is told the server is going, then it stops.
+    // Everyone is told the server is going, then it stops (once the rooms' replays are on disk).
     close() {
       clearTimeout(timer)
       for (const ws of wss.clients) {
         ws.send(JSON.stringify({ t: 'err', code: 'closing', text: 'The server is restarting' }))
         ws.close(4000 + CODES.indexOf('closing'), 'closing')
       }
-      lobby.dispose()
-      return new Promise<void>((resolve) => http.close(() => resolve()))
+      records?.close()
+      return Promise.all([lobby.dispose(), new Promise<void>((resolve) => http.close(() => resolve()))]).then(() => {})
     },
   }
 }

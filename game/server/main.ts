@@ -16,6 +16,8 @@ import { createGameServer } from './server'
 //                          production, so pages from Vite's dev server (build 'dev') are refused too
 //   NET_LAG_MS             development only: ms added each way to every message
 //   NET_JITTER_MS          development only: ms either side of NET_LAG_MS, message by message (order kept)
+//   MATCH_DIR              a folder to keep every match's record and each room's replay in (records.ts); unset: nothing is kept
+//   REPLAY_DAYS            days a replay is kept (default 3); the match records stay
 
 const env = process.env
 const refuse = (reason: string): never => {
@@ -50,6 +52,7 @@ const server = createGameServer({
   strict: trustProxy,
   lag: settings.lag,
   jitter: settings.jitter,
+  records: env.MATCH_DIR ? { dir: env.MATCH_DIR, days: whole('REPLAY_DAYS', 3, 1) } : undefined,
 })
 await server.listen()
 

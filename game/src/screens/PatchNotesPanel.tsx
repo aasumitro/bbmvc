@@ -2,9 +2,19 @@ import { useState } from 'react'
 
 const ENTRIES = [
   {
+    version: '0.11.0',
+    notes: [
+      'Chat in online matches: Enter talks to everyone, T to your team in Team Deathmatch (Tab switches while you type), /w name to whisper, /r to answer, /mute name to mute someone. While you type your car is left alone',
+      'Online matches send about a third less data: the snapshots of the machines travel packed, not as text',
+      'Every online match is kept on record for fair play — the result, each player’s statistics and signs of aim help — with a replay of it for 3 days. Chat isn’t stored',
+      'Guest accounts are kept for 3 days, then deleted: create an account to keep your name',
+      'The Arena screen lists Custom, coming soon; with Back chosen, the right side stays clear',
+    ],
+  },
+  {
     version: '0.10.0',
     notes: [
-      'Classic is matchmaking now: Find Match, and the game server finds you other players of the mode, picks the arena and starts a match for you — eight at once, four or more after 10 seconds, any two after 30 — or offers you a free seat in a match that is less than half over',
+      'Classic is matchmaking now: Find Match, and the game server finds you other players of the mode on the arena you picked and starts a match for you there — eight at once, four or more after 10 seconds, any two after 30 — or offers you a free seat in a match there that is less than half over',
       'Match found: 10 seconds to accept (Enter or Y) or decline (N), on any screen, with a sound. If too few accept, those who did go back to searching with their place kept',
       'Practise while you wait: Practice still starts on the Arena screen during a search, a line at the edge says the search is on, and the match found shows over the practice match; accepting takes you straight into the online match',
       'A new online match waits for everyone to load (Waiting for players) before the countdown, up to 20 seconds; someone slower drops in on their bot’s seat',

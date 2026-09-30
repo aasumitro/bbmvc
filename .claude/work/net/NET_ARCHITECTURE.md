@@ -10,9 +10,10 @@ below the line is the section.
 
 Online matches run on an authoritative game server, `game/server/`. It is a
 Node process that runs **the same `simulation.ts`, modes and bots as a
-practice match**, one implementation for both. Nakama keeps identity only:
-accounts, guests, sessions, the online count. The rule: **the server decides;
-the client asks and shows.**
+practice match**, one implementation for both. Nakama is the control plane,
+never the gameplay: accounts, guests, sessions, the online count, the match
+chat (why gameplay stays out of Nakama, measured: `.claude/work/nakama-mm/PLAN.md`).
+The rule: **the server decides; the client asks and shows.**
 
 ```
 browser                                              game server (Node, :7360)
@@ -23,18 +24,19 @@ browser                                              game server (Node, :7360)
             └ online:   online.ts → net/client   │          + createSimulation (as practice)
                           ├ prediction (own car) │          + recorder (SimEvents → wire)
                           ├ snapshots (the others)          + rewind (lag compensation)
-                          └ connection ── JSON over WebSocket ──┘
-                  hello (Nakama token, build id) → mm … → welcome → in / s, st, ro
-Nakama: sign-in and sessions. The game server checks the token's HS256 signature
-with Nakama's key itself; it never calls Nakama.
+                          └ connection ── WebSocket ────────┘  + fairplay, match records, the replay journal
+                  hello (Nakama token, build id) → mm … → welcome → in / s (binary), st, ro
+ net/chat ── Nakama's realtime socket ──► Nakama: sign-in, sessions, the online count, the match chat
+The game server checks the session token's HS256 signature with Nakama's key
+itself; it never calls Nakama, and Nakama never carries a snapshot or an input.
 ```
 
 ### Matchmaking (Classic)
 
 Find Match opens one socket: a hello with no map is a matchmaking session.
-The player searches a mode; the matcher (`server/matchmaker.ts`, every
+The player searches a mode on an arena; the matcher (`server/matchmaker.ts`, every
 number in `MATCHMAKING`) offers bots' seats in running matches first
-(backfill), then groups tickets of one mode and build, oldest first: eight
+(backfill), then groups tickets of one mode, arena and build, oldest first: eight
 at once, four or more after 10 s, two or more after 30 s. Everyone in a
 proposal gets a ready check (10 s); two or more accepts start it — bots take
 the rest — and accepters of one that didn't start go back with their place
@@ -49,11 +51,13 @@ decisions and log: `.claude/work/mm/`.
 
 | State | Owner | The other side |
 |---|---|---|
-| Poses, hulls, wrecks, respawns, recovery | the room's simulation | snapshots (`s`), 30 Hz |
+| Poses, hulls, wrecks, respawns, recovery | the room's simulation | snapshots (`s`, a binary frame of the same integers the JSON had), 30 Hz |
 | Weapons: fire rate, ammo, reload, hits, damage | the room's simulation | events (`ev`) and the player's `me` row |
 | Match rules: clock, phase, score, pickups, zones, protection, standings | the room's mode | `st` when it changes: `mode.share()` → `mode.mirror()` |
 | Statistics | the room's scoring | `st` |
-| Seats: who is a person, names, guns | the room | `welcome`, then `ro` |
+| Seats: who is a person (and their user id), names, guns; the room's chat channels | the room | `welcome`, then `ro` |
+| Chat messages | Nakama (`chat.lua`'s rules) | Nakama's realtime socket; never stored |
+| Match records, fair-play counts, replays | the room | `MATCH_DIR` on the server's disk |
 | Controls, aim, the tick the player sees | the page | `in`, one a step, clamped and rate-limited on arrival |
 | The player's car between snapshots | the page (predicted) | put right against `s` |
 | The others between snapshots | the page (drawn 67 ms back) | from `s` |
@@ -122,17 +126,51 @@ The authority is the anti-cheat. The door (`server/server.ts`) adds:
 `protocol.ts` adds the input rules: finite numbers, the aim within range, the
 view within the rewind, and sequence numbers that only go forward.
 
+What the authority can't stop, aim help, `server/fairplay.ts` counts per
+person. Lock-on legitimately puts a fair page's aim on a hostile in sight, so
+the counters are only what a fair page can't produce:
+- firing with the aim inside a hostile that can't be seen from the car's roof or the chase camera, where the shooter's page drew it;
+- snaps of over 40° onto a hostile that is then hit;
+- triggers pulled the step the aim arrives.
+
+Past a threshold a person is flagged in the match record and a `fairplay` log
+line, for a person to review with the replay. Nothing acts on a flag
+automatically.
+
 Known limits:
 
-- aim help;
-- wallhacks (every page gets every position);
+- aim help (flagged for review, never blocked);
+- wallhacks (every page gets every position; the minimap shows every enemy within 78 m by design). Not sending hostiles beyond the minimap and out of sight would leave out about 60 % of the rows in free for all, and 7–15 % in team deathmatch (measured: `.claude/work/nakama-mm/LOG.md`). It's the next step, once the page can hide a machine it stops hearing about.
 - token revocation (and Nakama's refresh key must differ from its session key: `deploy.sh` checks);
 - floods beyond the per-address cap;
 - a person taking over a bot's seat mid-match inherits its stats;
 - hits past 200 ms of latency need a lead.
 
+### What a room keeps
+
+With `MATCH_DIR` set, the server keeps:
+- **A record per match** that ends: `matches-YYYY-MM.jsonl`, one JSON line with the room, mode, arena, build, seed, times, result, and for every seat its person (uid, name) or bot, team, gun, statistics and fair-play counts.
+- **A replay per room:** `replays/YYYY-MM-DD/<room>-<ms>.ndjson.gz`, the room's journal. It holds the seats taken and left after each step, what each person's machine was given on each step (written only when it changes), and each next match's seed.
+
+`node dist-server/replay.js <file> [matches…]` runs the room again from the
+journal: the simulation is deterministic, so every machine ends where it did
+and every match record comes out the same. `server.check` holds a replay to
+that, and so does the tool, given the kept records. Replays are pruned after
+`REPLAY_DAYS` (3); the records stay, and `scripts/backup.sh` archives them
+each night with Nakama's database. A replay viewer in the game comes later.
+
+### The match chat
+
+The chat runs on Nakama's realtime chat, over the page's own Nakama socket
+(`net/chat.ts`), not through the game server.
+- **Room and team channels:** the welcome names the room's channel, and the team's in team deathmatch. The names are random (`sy-` and 24 hex digits) and told only to that room's, or that team's, seats: a Nakama room channel lets in whoever knows its name.
+- **Whispers:** direct messages to the user id the welcome, or an `ro`, gives for a seat.
+- **Rules:** `nakama/data/modules/chat.lua` holds every page to the game's room names, `{"text"}` of 1–200 characters, 8 messages in 10 s, and nothing stored.
+
 ### Checks
 
 `npm run check` ends with `server:check`: the arenas headless, a real server
-over real sockets, headless pages through `net/`, and netplay at 50–150 ms each
-way. Design, numbers and the owner's runbook: `.claude/work/net/`.
+over real sockets, a room's replay run again to the same end, headless pages
+through `net/`, and netplay at 50–150 ms each way. The chat's rules need a
+Nakama: `scripts/chat-smoke.mjs`. Design, numbers and the owner's runbook:
+`.claude/work/net/`, and `.claude/work/nakama-mm/` for what came after.

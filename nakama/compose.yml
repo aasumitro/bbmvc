@@ -15,7 +15,7 @@ services:
       - "5432:5432"
 
   nakama:
-    image: docker.io/heroiclabs/nakama:3.30.0
+    image: docker.io/heroiclabs/nakama:3.41.0
     entrypoint:
       - "/bin/sh"
       - "-ecx"

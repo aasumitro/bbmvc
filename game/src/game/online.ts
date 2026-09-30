@@ -52,6 +52,7 @@ export function createOnlineMatch({ scene, camera, arena, surface, link, onPhase
     {
       online: true,
       people: client.humans,
+      uids: client.uids,
       seed: () => seed,
       drives: (looking) => looking, // the server holds everyone on the grid
       attach: (given) => Object.assign(hooks, given),

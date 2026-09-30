@@ -23,7 +23,6 @@ function world({ openings = [] as Opening[], capacity = 12, config = {} as Parti
   const mm = createMatchmaker(
     {
       now: () => w.now,
-      arenas: () => ['scrapyard', 'city'],
       openings: () => w.openings,
       capacity: () => w.capacity,
       start(proposal, uids) {
@@ -56,7 +55,7 @@ function world({ openings = [] as Opening[], capacity = 12, config = {} as Parti
       w.now = ms
       mm.tick()
     },
-    search: (uids: string[], mode = 'ffa', build = 'b1') => uids.forEach((uid) => mm.search(uid, mode, build)),
+    search: (uids: string[], mode = 'ffa', build = 'b1', map = 'city') => uids.forEach((uid) => mm.search(uid, mode, map, build)),
     open: () => [...mm.proposals.values()],
   }
 }
@@ -67,18 +66,18 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
 
 {
   const s = world()
-  const t = s.mm.search('a', 'ffa', 'b1')
+  const t = s.mm.search('a', 'ffa', 'city', 'b1')
   check(t.status === 'searching' && s.last('a')?.state === 'searching', 'a search makes a ticket, and the player hears they are searching')
   s.w.now = 4000
-  const again = s.mm.search('a', 'tdm', 'b1')
+  const again = s.mm.search('a', 'tdm', 'scrapyard', 'b1')
   const q = s.last('a')
-  check(again === t && again.mode === 'ffa' && again.createdAt === 0 && q?.state === 'searching' && q.waited === 4000, 'a second start is the same ticket, as it stands: its mode, its age')
+  check(again === t && again.mode === 'ffa' && again.map === 'city' && again.createdAt === 0 && q?.state === 'searching' && q.map === 'city' && q.waited === 4000, 'a second start is the same ticket, as it stands: its mode, its arena, its age')
   s.mm.cancel('a')
   check(!s.mm.ticketOf('a') && s.last('a')?.state === 'idle' && s.note('a') === 'cancelled', 'cancel ends the ticket, and says so')
   s.mm.cancel('a')
   check(s.last('a')?.state === 'idle' && !s.note('a'), 'cancelling again changes nothing')
 
-  s.mm.search('b', 'ffa', 'b1')
+  s.mm.search('b', 'ffa', 'city', 'b1')
   s.w.now = 5000
   s.mm.disconnect('b')
   s.at(5000 + grace - 1)
@@ -87,8 +86,8 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
   check(!s.mm.ticketOf('b') && s.note('b') === 'gone', 'and loses it when the grace runs out')
 
   s.w.now = 20_000
-  const c = s.mm.search('c', 'ffa', 'b1')
-  s.mm.search('d', 'ffa', 'b1')
+  const c = s.mm.search('c', 'ffa', 'city', 'b1')
+  s.mm.search('d', 'ffa', 'city', 'b1')
   const dropped = 20_000 + startSmallAfterMs - 5000
   s.w.now = dropped
   s.mm.disconnect('c')
@@ -111,7 +110,7 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
   check(s.open().length === 1 && p.uids.length === 8 && people(8).every((uid) => s.mm.ticketOf(uid)?.status === 'in_proposal'), 'eight searchers: one full proposal at once')
   const q = s.found('p3')
   check(!!q && q.state === 'found' && q.size === 8 && q.players === 8 && q.left === readyCheckMs && q.of === readyCheckMs && q.id === p.id && q.map === p.map, 'everyone in it hears: match found, eight players, the whole ready check to answer')
-  check(['scrapyard', 'city'].includes(p.map), `the server picks the arena (${p.map})`)
+  check(p.map === 'city', `played on the arena they searched for (${p.map})`)
 }
 {
   const s = world()
@@ -149,9 +148,11 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
   s.search(people(4, 'x'), 'ffa', 'b1')
   s.search(people(4, 'y'), 'ffa', 'b2')
   s.search(people(4, 'z'), 'tdm', 'b1')
+  s.search(people(4, 'w'), 'ffa', 'b1', 'scrapyard')
   s.at(fullOnlyWindowMs)
   const groups = s.open().map((p) => p.uids.map((uid) => uid[0]).join(''))
-  check(groups.length === 3 && groups.every((g) => new Set(g).size === 1), `builds and modes never mix (${groups.join(' ')})`)
+  check(groups.length === 4 && groups.every((g) => new Set(g).size === 1), `builds, modes and arenas never mix (${groups.join(' ')})`)
+  check(s.open().find((p) => p.uids[0] === 'w0')?.map === 'scrapyard' && s.open().find((p) => p.uids[0] === 'x0')?.map === 'city', 'each group plays on the arena it searched for')
 }
 {
   const s = world()
@@ -160,7 +161,7 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
   s.at(1)
   const uids = s.open().flatMap((p) => p.uids)
   check(s.open().length === 2 && uids.length === 16 && new Set(uids).size === 16, 'sixteen searchers: two full proposals, nobody in both, none more on the next tick')
-  check(s.open()[0].map !== s.open()[1].map, 'the arenas rotate')
+  check(s.open().every((p) => p.map === 'city'), 'both on the arena they searched for: no rotation')
   s.at(fullOnlyWindowMs * 3)
   check(s.open().length === 0, 'unanswered, both lapse')
 }
@@ -233,7 +234,7 @@ function proposal(n: number, config: Partial<MatchmakingConfig> = {}) {
   const s = proposal(2)
   s.mm.respond('p1', s.p.id, true)
   s.w.now = s.t0 + 3000
-  s.mm.search(['fresh'][0], 'ffa', 'b1')
+  s.mm.search(['fresh'][0], 'ffa', 'city', 'b1')
   s.at(s.t0 + readyCheckMs)
   const back = s.told.get('p1')!.find((q) => q.state === 'searching' && q.note === 'short')
   check(!s.starts.length && s.p.state === 'cancelled', 'one of two accepted: too few, it is off')
@@ -307,9 +308,9 @@ function room(fields: Partial<Opening> = {}): Opening {
   s.search(['third'])
   s.at(0)
   check(!s.open().length, 'no offer into a match more than half over')
-  s.w.openings = [room({ mode: 'tdm' }), room({ id: 'r2', build: 'b2' }), room({ id: 'r3', free: 0 })]
+  s.w.openings = [room({ mode: 'tdm' }), room({ id: 'r2', build: 'b2' }), room({ id: 'r3', free: 0 }), room({ id: 'r4', map: 'scrapyard' })]
   s.at(1)
-  check(!s.open().length, 'nor into another mode, another build, or a room with no bot seat')
+  check(!s.open().length, 'nor into another mode, another build, another arena, or a room with no bot seat')
   s.w.openings = []
   s.at(2)
   check(!s.open().length, 'and only into rooms the lobby lists (practice runs in the browser: the server has no practice rooms to offer)')

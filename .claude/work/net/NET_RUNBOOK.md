@@ -2,7 +2,8 @@
 
 What only a browser, Podman or the real server can prove. Everything else is
 in `npm run check` (see `NET_LOG.md`). Every command is one line; paste them
-as they are.
+as they are. For the chat, match records, replays and Nakama 3.41 (added
+later), the owner's steps are in `.claude/work/nakama-mm/LOG.md`.
 
 Branch: `claude/dazzling-bohr-7l8xui`.
 

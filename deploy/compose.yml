@@ -27,7 +27,10 @@ services:
   # every online match, run where players can't touch it. It checks Nakama's
   # session tokens itself, with Nakama's key, and needs nothing else. Caddy
   # is the only way in (/match on the site), so it trusts Caddy's
-  # X-Forwarded-For for players' addresses.
+  # X-Forwarded-For for players' addresses. It keeps every match's record and
+  # each room's replay on the game_matches volume (records.ts; replays pruned
+  # after REPLAY_DAYS, 3 by default): node dist-server/replay.js reads them.
+  # scripts/backup.sh archives the records (not the replays) each night.
   game:
     image: docker.io/library/node:24-alpine
     restart: unless-stopped
@@ -38,9 +41,12 @@ services:
       - NAKAMA_ENCRYPTION_KEY=${NAKAMA_ENCRYPTION_KEY:?}
       - ALLOWED_ORIGINS=https://${SITE_DOMAIN:?set SITE_DOMAIN in deploy/.env}
       - TRUST_PROXY=1
+      - MATCH_DIR=/home/node/matches
     volumes:
       # server/current: the release scripts/deploy.sh switched to (server/releases/<sha>), read when the container starts
       - ../server/current:/srv/server:ro
+      # a named volume: Podman gives it to the container's user (node) when it's first mounted
+      - game_matches:/home/node/matches
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7360/health"]
       interval: 10s
@@ -48,7 +54,7 @@ services:
       retries: 3
 
   nakama:
-    image: docker.io/heroiclabs/nakama:3.30.0
+    image: docker.io/heroiclabs/nakama:3.41.0
     restart: unless-stopped
     entrypoint:
       - "/bin/sh"
@@ -94,3 +100,4 @@ services:
 volumes:
   caddy_data:
   postgres_data:
+  game_matches:

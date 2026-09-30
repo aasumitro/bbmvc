@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Difficulty } from '../game/ai'
 import { flushSync } from 'react-dom'
 import { playSound } from '../game/audio'
@@ -8,8 +8,10 @@ import { MAPS, type MapId } from '../game/maps'
 import type { Match, MatchPhase } from '../game/match'
 import type { Mode } from '../game/modes'
 import { startGame } from '../game/runtime'
+import { createChat, type Chat } from '../net/chat'
 import { NetError, type Link } from '../net/connection'
 import { settings, updateSettings } from '../game/settings'
+import { ChatBox } from '../hud/Chat'
 import { Hud, type HudHandle } from '../hud/Hud'
 import { Drawer } from './Drawer'
 import { ActionButton, Menu } from './Menu'
@@ -45,6 +47,7 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
   const [drawer, setDrawer] = useState<'settings' | null>(null) // over the pause menu
   const [scores, setScores] = useState(false) // Tab held: the HUD scoreboard
   const [leaving, setLeaving] = useState(false) // Exit to garage picked mid-match: asking to confirm
+  const chatting = useRef(false) // the chat line is open: the mouse is free without pausing anything
 
   useEffect(() => {
     const container = containerRef.current
@@ -77,6 +80,28 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
       game.dispose()
     }
   }, [loadout, mode, map, difficulty, link, attempt])
+
+  // Online: the match's chat (net/chat.ts), joined for as long as the match runs.
+  const chat: Chat | null = useMemo(() => (link && match ? createChat(link.welcome.chat, { names: () => match.combatants.map((c) => c.name), uids: () => match.uids, me: () => match.player.id }) : null), [link, match])
+  useEffect(() => {
+    if (!chat) return
+    chat.start()
+    return () => chat.dispose()
+  }, [chat])
+  // The chat box is up while the match is played, not under a menu or the results.
+  const chatActive = (phase === 'playing' || phase === 'destroyed') && !drawer && !leaving
+  useEffect(() => {
+    if (!chatActive) chatting.current = false
+  }, [chatActive])
+
+  // The chat line opens (the mouse and every held key let go: typing never
+  // drives) and closes (a message sent gives the game the mouse back; Enter
+  // may take it, Esc may not).
+  const typing = (open: boolean, sent = false) => {
+    chatting.current = open
+    if (open) match?.unlock()
+    else if (sent) match?.lock()
+  }
 
   const retry = () => {
     setFailed(null)
@@ -124,7 +149,7 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
     }
     const hideScores = () => setScores(false)
     function onLockChange() {
-      if (document.pointerLockElement || !match) return
+      if (document.pointerLockElement || !match || chatting.current) return // the chat line took the mouse
       lockLostAt = performance.now()
       match.pause(true)
     }
@@ -154,6 +179,7 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
     <>
       <div ref={containerRef} className="fixed inset-0 cursor-none bg-[#0b0908]" /> {/* the crosshair is the pointer */}
       <Hud ref={hudRef} />
+      {chat && chatActive && <ChatBox chat={chat} onTyping={typing} />}
       {/* the match's loading: the bar is the share of steps finished, the line under it the one running */}
       {phase === 'loading' && (
         <div className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-[#0b0908] text-[#f2ece0]">

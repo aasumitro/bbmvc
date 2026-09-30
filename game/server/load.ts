@@ -7,7 +7,7 @@
 //   npm run server:build && ROOMS=12 PLAYERS=8 node dist-server/load.js
 import { MAPS, type MapId } from '../src/game/maps'
 import { initPhysics, PHYSICS_STEP } from '../src/game/physics'
-import { inputMessage, parseClient } from '../src/net/protocol'
+import { inputMessage, parseClient, wireSize } from '../src/net/protocol'
 import { arenaData } from './arenas'
 import { createRoom } from './room'
 
@@ -23,7 +23,7 @@ for (const id of maps) arenaData(id)
 let bytes = 0
 const rooms = Array.from({ length: ROOMS }, (_, n) => {
   const room = createRoom({ id: `load${n}`, mode: n % 2 ? 'tdm' : 'ffa', map: maps[n % maps.length], seed: 1000 + n })
-  const people = Array.from({ length: PLAYERS }, (_, k) => room.join({ uid: `load-${n}-${k}`, name: `P${k}`, loadout: { vehicle: 'razor', weapon: k % 2 ? 'rocketPod' : 'minigun' }, send: (text) => (bytes += text.length), close() {} }, 0)!)
+  const people = Array.from({ length: PLAYERS }, (_, k) => room.join({ uid: `load-${n}-${k}`, name: `P${k}`, loadout: { vehicle: 'razor', weapon: k % 2 ? 'rocketPod' : 'minigun' }, send: (data) => (bytes += wireSize(data)), close() {} }, 0)!)
   return { room, people }
 })
 

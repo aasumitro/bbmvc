@@ -4,8 +4,9 @@ import type { ReactNode } from 'react'
 
 export interface MenuItem {
   label: string
-  hint?: string // said beside the chosen entry
+  hint?: string // said beside the chosen entry; beside a disabled one always
   danger?: boolean // chosen, it reads red: a destructive answer
+  disabled?: boolean // shown dimmed, never chosen (the screen's keys step over it)
 }
 
 interface MenuProps {
@@ -27,17 +28,24 @@ export function Menu({ items, selected, onSelect, onActivate, row = false, class
       {items.map((item, i) => {
         const chosen = i === selected
         return (
-          <button key={item.label} onClick={() => onActivate(i)} onMouseEnter={() => onSelect(i)} onFocus={() => onSelect(i)} className="group relative flex items-start gap-4 text-left">
+          <button
+            key={item.label}
+            disabled={item.disabled}
+            onClick={() => onActivate(i)}
+            onMouseEnter={() => !item.disabled && onSelect(i)} // a disabled button still hears the mouse
+            onFocus={() => onSelect(i)}
+            className="group relative flex items-start gap-4 text-left disabled:cursor-not-allowed disabled:opacity-45"
+          >
             {!row && <span className={`absolute top-2.5 -left-6 h-7 w-0.5 -translate-y-1/2 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)] transition-opacity ${chosen ? 'opacity-100' : 'opacity-0'}`} />}
             <span className="flex h-5 w-3 shrink-0 items-center justify-center">
               <span className={chosen ? 'h-2.5 w-2.5 rotate-45 bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.9)]' : 'h-2 w-2 rotate-45 border border-neutral-300/70'} />
             </span>
             <span className="flex items-baseline gap-3">
               <span className="flex flex-col gap-2">
-                <span className={`text-sm font-bold tracking-[0.15em] whitespace-nowrap uppercase ${chosen ? (item.danger ? 'text-red-400' : 'text-white') : 'text-neutral-400 group-hover:text-neutral-200'}`}>{item.label}</span>
+                <span className={`text-sm font-bold tracking-[0.15em] whitespace-nowrap uppercase ${chosen ? (item.danger ? 'text-red-400' : 'text-white') : item.disabled ? 'text-neutral-400' : 'text-neutral-400 group-hover:text-neutral-200'}`}>{item.label}</span>
                 <span className={`h-0.5 bg-red-500 transition-[width] duration-200 ${chosen ? 'w-1/2' : 'w-0'}`} />
               </span>
-              {chosen && item.hint && <span className="font-display text-sm whitespace-nowrap text-neutral-400 italic">{item.hint}</span>}
+              {(chosen || item.disabled) && item.hint && <span className="font-display text-sm whitespace-nowrap text-neutral-400 italic">{item.hint}</span>}
             </span>
           </button>
         )

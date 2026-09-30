@@ -38,6 +38,7 @@ try {
       socket.onerror = () => reject(new Error(`match: can't connect to ${site}/match`))
       socket.onopen = () => socket.send(JSON.stringify({ t: 'hello', v: protocol, build, token: guest.token, guest: true, mode: 'ffa', map, loadout: { vehicle: 'razor', weapon: 'minigun' } }))
       socket.onmessage = (e) => {
+        if (typeof e.data !== 'string') return // a binary frame: a snapshot, once seated
         const message = JSON.parse(e.data)
         if (message.t === 'err') reject(new Error(`match: refused (${message.code}): ${message.text}`))
         if (message.t !== 'welcome') return

@@ -101,7 +101,7 @@ function ReadyCheck({ search }: { search: Found }) {
   )
 }
 
-// A search on: its mode and how long so far, and a way out. In a match it sits
+// A search on: its mode, arena and how long so far, and a way out. In a match it sits
 // at the right edge, clear of the HUD.
 function Searching({ search, inGame }: { search: Extract<Search, { phase: 'connecting' | 'searching' }>; inGame: boolean }) {
   const now = useClock(true)
@@ -109,7 +109,9 @@ function Searching({ search, inGame }: { search: Extract<Search, { phase: 'conne
   return (
     <div role="status" className={`fixed z-30 flex items-center gap-3 rounded border border-white/15 bg-black/65 px-4 py-2 text-xs font-bold tracking-[0.2em] whitespace-nowrap text-neutral-200 uppercase backdrop-blur-md ${inGame ? 'top-1/2 right-[2.2vw] -translate-y-1/2' : 'top-4 left-1/2 -translate-x-1/2'}`}>
       <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-      <span className="text-red-400">{modeName(search.mode)}</span>
+      <span className="text-red-400">
+        {modeName(search.mode)} · {mapName(search.map)}
+      </span>
       <span className="tabular-nums">{text}</span>
       <button onClick={cancelSearch} className="ml-2 text-neutral-400 uppercase hover:text-red-400">
         Cancel

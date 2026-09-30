@@ -13,7 +13,7 @@ import { initPhysics } from '../src/game/physics'
 import type { Combatant } from '../src/game/simulation'
 import { placeCar } from '../src/game/vehicle/drive'
 import { link, openSocket, sayHello } from '../src/net/connection'
-import type { ServerMessage } from '../src/net/protocol'
+import { readServer, type ServerMessage } from '../src/net/protocol'
 import { arenaData } from './arenas'
 import { mintToken } from './auth'
 import { browser, page, play as run, until as waitUntil, type Browser } from './browser'
@@ -218,13 +218,13 @@ check(x.client.net.lost !== '' && y.client.net.lost !== '', `a closed server is 
     const socket = await openSocket(`ws://127.0.0.1:${at}/match`, ORIGIN)
     const s = { heard: [] as ServerMessage[], page: null as Browser | null }
     socket.onmessage = (e) => {
-      const message = JSON.parse(String(e.data)) as ServerMessage
+      const message = readServer(e.data)
       s.heard.push(message)
       if (message.t === 'mm' && message.state === 'found') socket.send(JSON.stringify({ t: 'mm', do: 'accept', id: message.id }))
-      if (message.t === 'welcome') s.page = page(link(socket, message), arenaData(message.map as 'scrapyard'))
+      if (message.t === 'welcome') s.page = page(link(socket, message), arenaData(message.map as 'city'))
     }
     sayHello(socket, { token: mintToken({ uid, usn: uid, exp: Date.now() / 1000 + 3600 }, KEY), guest: true, loadout: { vehicle: 'razor', weapon: 'minigun' } })
-    socket.send(JSON.stringify({ t: 'mm', do: 'search', mode: 'tdm' }))
+    socket.send(JSON.stringify({ t: 'mm', do: 'search', mode: 'tdm', map: 'city' }))
     return s
   }
   const [a, b] = [await search('mm-a'), await search('mm-b')]

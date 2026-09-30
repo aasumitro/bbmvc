@@ -36,6 +36,15 @@ const CONTROLS = [
     ],
   },
   {
+    title: 'Chat (online)',
+    rows: [
+      { keys: ['Enter'], action: 'Chat to everyone; Enter sends, Esc cancels' },
+      { keys: ['T'], action: 'Chat to your team (team deathmatch)' },
+      { keys: ['/w name'], action: 'Whisper to a player; /r answers the last' },
+      { keys: ['/mute name'], action: 'Mute a player (/unmute undoes it)' },
+    ],
+  },
+  {
     title: 'Menus',
     rows: [
       { keys: ['↑', '↓'], action: 'Choose' },

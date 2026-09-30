@@ -21,7 +21,9 @@ WHERE id NOT IN (SELECT user_id FROM user_device)   -- one NULL ⇒ empty result
   lists unless a filter already does (`email IS NOT NULL` does).
 - **Registered vs guest** is a data question, not a column: email accounts have `email`;
   the game's guests are device accounts (a `user_device` row, no email). A player can have both
-  after linking — say which one a count means.
+  after linking — say which one a count means. Since 3.41 `user_device` also holds auth
+  providers' logins (`provider` not empty): a device is `provider = ''`. What the nightly
+  cleanup deletes (`data/modules/guests.lua`) is stricter: a device is the only way in.
 - **"Never" is the epoch, not NULL.** `disable_time` and `verify_time` are `NOT NULL` with
   default `1970-01-01`: a disabled account is `disable_time > '1970-01-01'`, and
   `disable_time IS NULL` matches nothing.

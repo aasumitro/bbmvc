@@ -1,4 +1,4 @@
-import { Client, Session } from '@heroiclabs/nakama-js'
+import { Client, Session, type Socket } from '@heroiclabs/nakama-js'
 
 // Who is playing. The site (www/) serves the game at /play, one origin, so a
 // login there is already here: both read and write the same localStorage
@@ -89,12 +89,29 @@ async function signInNamed(): Promise<Player> {
 // online (nakama/data/modules/stats.lua): the presence ends when it closes.
 // A dropped socket (a server restart, a network blip, no server at all)
 // comes back after a pause, with a fresh session: 5 s after a live socket
-// dropped, doubling to a minute while connecting keeps failing.
+// dropped, doubling to a minute while connecting keeps failing. The match
+// chat (chat.ts) talks over it: onSocket says which socket is live, and
+// again each time that changes.
+let live: Socket | null = null
+const socketListeners = new Set<(socket: Socket | null) => void>()
+function setLive(socket: Socket | null) {
+  live = socket
+  for (const listener of socketListeners) listener(socket)
+}
+
+// `listener` hears the live socket now and whenever it changes (null: none). Returns the unsubscribe.
+export function onSocket(listener: (socket: Socket | null) => void) {
+  socketListeners.add(listener)
+  listener(live)
+  return () => void socketListeners.delete(listener)
+}
+
 function goOnline(session: Session, wait = 5) {
   const socket = nakama.createSocket(nakama.useSSL)
   let connected = false
   let retrying = false
   const retry = () => {
+    if (live === socket) setLive(null)
     if (retrying) return
     retrying = true
     const next = connected ? 5 : Math.min(wait * 2, 60)
@@ -105,6 +122,7 @@ function goOnline(session: Session, wait = 5) {
     .connect(session, false)
     .then(() => {
       connected = true
+      setLive(socket)
       return socket.rpc('join_online', '{}')
     })
     .catch(retry)

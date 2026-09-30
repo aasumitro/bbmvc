@@ -40,3 +40,5 @@ nk.register_rpc(function(_, _)
   nk.localcache_put("stats", stats, KEEP)
   return stats
 end, "get_stats")
+
+return { ONLINE = ONLINE } -- guests.lua spares whoever is on it

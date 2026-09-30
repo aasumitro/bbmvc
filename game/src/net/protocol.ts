@@ -11,8 +11,10 @@ import { VEHICLES, type VehicleId } from '../game/vehicle/vehicles.ts'
 // only ever asks — controls, where it aims, what it sees; the server decides
 // and tells. JSON, each message an object with its type in `t`. Pure: no
 // sockets here. (Imports carry .ts: protocol.check.ts runs this under node.)
+// The snapshot alone goes as a binary frame (packSnapshot): it is most of
+// what a page is sent.
 
-export const PROTOCOL = 3 // bumped whenever a message changes shape: an old page is told to reload
+export const PROTOCOL = 5 // bumped whenever a message changes shape: an old page is told to reload
 // The build a page or a server was made from (build-id.ts, put in by Vite as
 // __BUILD__): the server lets in only pages of its own build, so a tab left
 // open across a deploy is told to reload even when no message changed shape
@@ -54,13 +56,14 @@ export interface Input {
   view: number // the server tick the player sees on screen
 }
 
-// Classic's matchmaking (server/matchmaker.ts): start searching in a mode,
-// stop, answer the ready check of proposal `id`, or ask where one stands.
+// Classic's matchmaking (server/matchmaker.ts): start searching in a mode on
+// an arena, stop, answer the ready check of proposal `id`, or ask where one stands.
 export const QUEUE_ACTIONS = ['search', 'cancel', 'accept', 'decline', 'state'] as const
 export interface Queueing {
   t: 'mm'
   do: (typeof QUEUE_ACTIONS)[number]
   mode: string // search: the mode ('' otherwise)
+  map: string // search: the arena, played on as asked ('' otherwise)
   id: string // accept, decline: the proposal ('' otherwise)
 }
 
@@ -74,6 +77,16 @@ export interface Seat {
   vehicle: VehicleId
   weapon: WeaponId
   human: boolean
+  uid: string // the person's Nakama user id (a whisper's address); '' for a bot
+}
+
+// The seat's chat channels (Nakama room channels, net/chat.ts): the room's,
+// and its team's in team deathmatch ('' otherwise). The names are the room's
+// own random ones, told only to its seats: a room channel lets in whoever
+// knows the name.
+export interface ChatChannels {
+  all: string
+  team: string
 }
 
 export interface Welcome {
@@ -88,6 +101,7 @@ export interface Welcome {
   rate: typeof RATE
   digest: string // the server's arena (arena/digest.ts): the page's must match
   lineUp: Seat[]
+  chat: ChatChannels
 }
 
 // The events of a snapshot, in step order: [code, tick, ...fields] (NET_PLAN.md §4).
@@ -126,13 +140,13 @@ export type QueueNote = 'cancelled' | 'declined' | 'missed' | 'gone' | 'short' |
 // once there is one, is a welcome on the same socket.
 export type Queue =
   | { t: 'mm'; state: 'idle'; note?: QueueNote }
-  | { t: 'mm'; state: 'searching'; mode: string; waited: number; note?: QueueNote } // waited: ms since the ticket was made (a requeue keeps it)
+  | { t: 'mm'; state: 'searching'; mode: string; map: string; waited: number; note?: QueueNote } // waited: ms since the ticket was made (a requeue keeps it)
   | {
       t: 'mm'
       state: 'found' | 'accepted' // accepted: the server has this player's accept
       mode: string
       id: string // the proposal: an answer names it
-      map: string // the arena, the server's choice
+      map: string // the arena: the one searched for, or the running match's (a backfill)
       players: number // people in the match if it starts
       size: number // people asked in this ready check
       accepted: number
@@ -145,7 +159,7 @@ export type ServerMessage =
   | Welcome
   | Snapshot
   | State
-  | { t: 'ro'; seat: number; name: string; human: boolean; weapon: WeaponId } // a seat changed hands
+  | { t: 'ro'; seat: number; name: string; human: boolean; weapon: WeaponId; uid: string } // a seat changed hands
   | { t: 'pong'; c: number; k: number }
   | { t: 'err'; code: ErrorCode; text: string }
   | Queue
@@ -239,6 +253,116 @@ export function readStats(row: readonly number[], out: Stats) {
   return out
 }
 
+// --- the snapshot, binary -----------------------------------------------------------------
+
+// A snapshot frame, little-endian: kind (u8, SNAPSHOT), tick (u32), ack
+// (i32), the rules' clock in ms (u32), the number of machines (u8); each
+// machine's row (CAR_BYTES); the player's own row (ME_BYTES); then the
+// events as UTF-8 JSON, or nothing when there are none. The integers are
+// carRow's and meRow's: a page reads the same numbers the JSON carried.
+// The 16- and 8-bit fields are clamped (a velocity past ±327 m/s is never
+// met in play). Everything else the server says stays JSON text.
+export const SNAPSHOT = 1
+const HEAD_BYTES = 14
+const CAR_BYTES = 44 // id u8, position i32×3, rotation i16×4, velocity i16×3, hull i16, flags u8, aim i32×3, throttle i8, steer i8
+const ME_BYTES = 40 // meRow: i32×10
+const encoder = new TextEncoder()
+const decoder = new TextDecoder()
+const NONE = new Uint8Array(0)
+const i32 = (n: number) => clamp(n, -2147483648, 2147483647)
+const i16 = (n: number) => clamp(n, -32768, 32767)
+const i8 = (n: number) => clamp(n, -128, 127)
+
+// Every machine's row, packed once a snapshot for everyone.
+export function packCars(rows: readonly (readonly number[])[]): Uint8Array {
+  const out = new Uint8Array(rows.length * CAR_BYTES)
+  const view = new DataView(out.buffer)
+  rows.forEach(([id, px, py, pz, qx, qy, qz, qw, vx, vy, vz, hp, flags, ax, ay, az, th, st], i) => {
+    const at = i * CAR_BYTES
+    view.setUint8(at, id)
+    view.setInt32(at + 1, i32(px), true)
+    view.setInt32(at + 5, i32(py), true)
+    view.setInt32(at + 9, i32(pz), true)
+    view.setInt16(at + 13, i16(qx), true)
+    view.setInt16(at + 15, i16(qy), true)
+    view.setInt16(at + 17, i16(qz), true)
+    view.setInt16(at + 19, i16(qw), true)
+    view.setInt16(at + 21, i16(vx), true)
+    view.setInt16(at + 23, i16(vy), true)
+    view.setInt16(at + 25, i16(vz), true)
+    view.setInt16(at + 27, i16(hp), true)
+    view.setUint8(at + 29, flags)
+    view.setInt32(at + 30, i32(ax), true)
+    view.setInt32(at + 34, i32(ay), true)
+    view.setInt32(at + 38, i32(az), true)
+    view.setInt8(at + 42, i8(th))
+    view.setInt8(at + 43, i8(st))
+  })
+  return out
+}
+
+// The events of a snapshot, packed once for everyone.
+export const packEvents = (events: readonly WireEvent[]) => (events.length ? encoder.encode(JSON.stringify(events)) : NONE)
+
+// One player's snapshot: the shared parts (packCars, packEvents) around their own ack and row.
+export function packSnapshot(tick: number, ack: number, now: number, cars: Uint8Array, me: readonly number[], events: Uint8Array): Uint8Array {
+  const out = new Uint8Array(HEAD_BYTES + cars.length + ME_BYTES + events.length)
+  const view = new DataView(out.buffer)
+  view.setUint8(0, SNAPSHOT)
+  view.setUint32(1, tick, true)
+  view.setInt32(5, i32(ack), true)
+  view.setUint32(9, Math.max(0, now), true)
+  view.setUint8(13, cars.length / CAR_BYTES)
+  out.set(cars, HEAD_BYTES)
+  const mine = HEAD_BYTES + cars.length
+  me.forEach((n, i) => view.setInt32(mine + i * 4, i32(n), true))
+  out.set(events, mine + ME_BYTES)
+  return out
+}
+
+// A snapshot frame, read back into the message the JSON used to be.
+export function unpackSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (bytes.length < HEAD_BYTES || view.getUint8(0) !== SNAPSHOT) throw new Error('not a snapshot frame')
+  const count = view.getUint8(13)
+  const cars: number[][] = []
+  for (let i = 0; i < count; i++) {
+    const at = HEAD_BYTES + i * CAR_BYTES
+    cars.push([
+      view.getUint8(at),
+      view.getInt32(at + 1, true),
+      view.getInt32(at + 5, true),
+      view.getInt32(at + 9, true),
+      view.getInt16(at + 13, true),
+      view.getInt16(at + 15, true),
+      view.getInt16(at + 17, true),
+      view.getInt16(at + 19, true),
+      view.getInt16(at + 21, true),
+      view.getInt16(at + 23, true),
+      view.getInt16(at + 25, true),
+      view.getInt16(at + 27, true),
+      view.getUint8(at + 29),
+      view.getInt32(at + 30, true),
+      view.getInt32(at + 34, true),
+      view.getInt32(at + 38, true),
+      view.getInt8(at + 42),
+      view.getInt8(at + 43),
+    ])
+  }
+  const mine = HEAD_BYTES + count * CAR_BYTES
+  const me = Array.from({ length: ME_BYTES / 4 }, (_, i) => view.getInt32(mine + i * 4, true))
+  const tail = mine + ME_BYTES
+  const ev = tail < bytes.length ? (JSON.parse(decoder.decode(bytes.subarray(tail))) as WireEvent[]) : []
+  return { t: 's', k: view.getUint32(1, true), ack: view.getInt32(5, true), now: view.getUint32(9, true), cars, me, ev }
+}
+
+// What the server sent, as a message: a binary frame is a snapshot, text is JSON.
+export const readServer = (data: string | ArrayBuffer | Uint8Array): ServerMessage => (typeof data === 'string' ? (JSON.parse(data) as ServerMessage) : unpackSnapshot(data))
+
+// Bytes a message takes on the wire (text: its length, as the checks have always counted it).
+export const wireSize = (data: string | Uint8Array) => (typeof data === 'string' ? data.length : data.byteLength)
+
 // One step's controls as the client sends them.
 export function inputMessage(seq: number, control: { throttle: number; steer: number; handbrake: boolean; fire: boolean; recover: boolean; aim: { x: number; y: number; z: number } }, view: number) {
   const { throttle, steer, handbrake, fire, recover, aim } = control
@@ -306,13 +430,13 @@ export function parseClient(raw: string, bytes = raw.length): Parsed {
     }
     case 'mm': {
       if (bytes > LIMITS.input) return refuse('queue message too large')
-      const [mode, id] = [m.mode ?? '', m.id ?? '']
+      const [mode, map, id] = [m.mode ?? '', m.map ?? '', m.id ?? '']
       const act = QUEUE_ACTIONS.find((a) => a === m.do)
       if (!act) return refuse('bad queue action')
-      if (!optional(mode, LIMITS.name) || !optional(id, LIMITS.name)) return refuse('bad mode or proposal')
-      if (act === 'search' && !mode) return refuse('a search without a mode')
+      if (!optional(mode, LIMITS.name) || !optional(map, LIMITS.name) || !optional(id, LIMITS.name)) return refuse('bad mode, map or proposal')
+      if (act === 'search' && (!mode || !map)) return refuse('a search without a mode or map')
       if ((act === 'accept' || act === 'decline') && !id) return refuse('an answer without a proposal')
-      return { ok: true, message: { t: 'mm', do: act, mode, id } }
+      return { ok: true, message: { t: 'mm', do: act, mode, map, id } }
     }
     case 'ping':
       return finite(m.c) ? { ok: true, message: { t: 'ping', c: m.c } } : refuse('bad ping')
