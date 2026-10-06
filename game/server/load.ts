@@ -1,11 +1,14 @@
-// A capacity estimate: ROOMS rooms (default 8) with PLAYERS simulated
+// A capacity estimate: ROOMS rooms (default 8) of SEATS machines (default
+// 8, Classic's; 12, a custom lobby's biggest) with PLAYERS simulated
 // players each (default 4, the rest bots), stepped for SECONDS of match
 // time (default 20) as fast as the machine allows, everything a real room
 // does included — inputs through the parser, snapshots and state written
 // for every player — except the sockets. Prints the share of one core the
 // rooms need at 60 steps a second, step times, memory and bytes a player.
 //   npm run server:build && ROOMS=12 PLAYERS=8 node dist-server/load.js
+//   ROOMS=12 SEATS=12 PLAYERS=12 node dist-server/load.js
 import { MAPS, type MapId } from '../src/game/maps'
+import { classic } from '../src/game/matchSettings'
 import { initPhysics, PHYSICS_STEP } from '../src/game/physics'
 import { inputMessage, parseClient, wireSize } from '../src/net/protocol'
 import { arenaData } from './arenas'
@@ -13,7 +16,8 @@ import { createRoom } from './room'
 
 const env = process.env
 const ROOMS = Number(env.ROOMS ?? 8)
-const PLAYERS = Math.min(8, Number(env.PLAYERS ?? 4))
+const SEATS = Number(env.SEATS ?? 8) // even: half a side in team deathmatch
+const PLAYERS = Math.min(SEATS, Number(env.PLAYERS ?? 4))
 const SECONDS = Number(env.SECONDS ?? 20)
 
 await initPhysics()
@@ -22,7 +26,8 @@ for (const id of maps) arenaData(id)
 
 let bytes = 0
 const rooms = Array.from({ length: ROOMS }, (_, n) => {
-  const room = createRoom({ id: `load${n}`, mode: n % 2 ? 'tdm' : 'ffa', map: maps[n % maps.length], seed: 1000 + n })
+  const mode = n % 2 ? 'tdm' : 'ffa'
+  const room = createRoom({ id: `load${n}`, mode, map: maps[n % maps.length], seed: 1000 + n, settings: { ...classic(mode), size: SEATS } })
   const people = Array.from({ length: PLAYERS }, (_, k) => room.join({ uid: `load-${n}-${k}`, name: `P${k}`, loadout: { vehicle: 'razor', weapon: k % 2 ? 'rocketPod' : 'minigun' }, send: (data) => (bytes += wireSize(data)), close() {} }, 0)!)
   return { room, people }
 })

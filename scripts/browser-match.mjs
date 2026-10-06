@@ -9,6 +9,15 @@
 // the other page's screen, and that when a page leaves, a bot takes its seat
 // back. Screenshots of both pages, the F3 overlay on, go to SHOTS (default: a
 // new temporary folder, printed).
+// With `custom`, a custom lobby instead (.claude/work/custom/PLAN.md): one
+// page makes a lobby for 6 v 6, the other joins by its invite code and
+// readies, the owner starts at 2 of 12, both play in one room, go back to
+// the waiting room, and start again; a reload in the waiting room gets
+// back in; a third page, signed out, opens the invite link and lands in
+// the lobby; screenshots of the list, the drawer, the waiting rooms and the
+// match, at a desktop's size. Not a reload in a match: a page reloaded cold
+// under SwiftShader takes minutes to load the match again, past the
+// server's minute without input (client.check holds coming back to a seat).
 // SwiftShader draws on the CPU: 1–2 frames a second here, so a page steps a
 // fraction of real time and its inputs reach the server in bursts, with gaps
 // past the server's 250 ms (the car coasts between them); the prediction
@@ -16,7 +25,7 @@
 // step 7: a person, a real GPU).
 // Needs Playwright with its Chromium, installed globally: it isn't one of the
 // game's dependencies (npm root -g must hold playwright).
-//   node scripts/browser-match.mjs
+//   node scripts/browser-match.mjs [custom]
 // Exits non-zero when a check fails.
 import { execSync, spawn } from 'node:child_process'
 import { createHmac, randomUUID } from 'node:crypto'
@@ -89,9 +98,10 @@ const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] })
 say(`Chromium ${browser.version()}`)
 
-async function open(name) {
+// A page of its own guest, past the main menu's Play: the arena screen (`link`: a page opened at a link instead, as it lands).
+async function newPage(name, viewport = { width: 640, height: 360 }, link = '/') {
   const uid = randomUUID()
-  const context = await browser.newContext({ viewport: { width: 640, height: 360 } })
+  const context = await browser.newContext({ viewport })
   // low quality, half resolution, the F3 overlay on: SwiftShader draws on the CPU
   await context.addInitScript(() => localStorage.getItem('scrapyard.settings') || localStorage.setItem('scrapyard.settings', JSON.stringify({ quality: 'low', resolutionScale: 0.5, debug: true })))
   // Nakama, as far as the game asks it: a guest's sign-in (and a refresh), the account
@@ -107,15 +117,21 @@ async function open(name) {
   })
   const page = await context.newPage()
   page.on('pageerror', (error) => say(`${name}: page error: ${error.message}`))
-  const from = performance.now()
-  await page.goto(`${origin}/`)
-  await page.getByText('Play', { exact: true }).first().click({ timeout: 180_000 })
-  await page.getByText('Classic', { exact: true }).click({ timeout: 60_000 }) // Find Match: two searchers meet once the older has waited 30 s
-  await page.getByText('Match found', { exact: true }).waitFor({ timeout: 90_000 })
-  await page.keyboard.press('KeyY') // accept
-  await page.waitForFunction(() => window.match?.online && window.match.phase === 'playing' && !document.body.innerText.includes('Compiling'), null, { timeout: 400_000 })
-  say(`${name}: in the match, ${((performance.now() - from) / 1000).toFixed(0)} s after opening the page`)
+  await page.goto(`${origin}${link}`)
+  if (link === '/') await page.getByText('Play', { exact: true }).first().click({ timeout: 180_000 })
   return { name, uid, context, page }
+}
+const inMatch = (p) => p.page.waitForFunction(() => window.match?.online && window.match.phase === 'playing' && !document.body.innerText.includes('Compiling'), null, { timeout: 400_000 })
+
+async function open(name) {
+  const from = performance.now()
+  const p = await newPage(name)
+  await p.page.getByText('Classic', { exact: true }).click({ timeout: 60_000 }) // Find Match: two searchers meet once the older has waited 30 s
+  await p.page.getByText('Match found', { exact: true }).waitFor({ timeout: 90_000 })
+  await p.page.keyboard.press('KeyY') // accept
+  await inMatch(p)
+  say(`${name}: in the match, ${((performance.now() - from) / 1000).toFixed(0)} s after opening the page`)
+  return p
 }
 
 const room = async (p) => {
@@ -129,7 +145,88 @@ const shot = async (p, what) => {
   return path
 }
 
-try {
+// --- a custom lobby between two pages ----------------------------------------------------------------------------
+
+// Out of the match into the lobby's waiting room: the match menu's Back to lobby, confirmed.
+async function backToLobby(p) {
+  await p.page.keyboard.press('Escape')
+  await p.page.getByText('Back to lobby', { exact: true }).first().click({ timeout: 30_000 })
+  await p.page.getByRole('dialog').getByText('Back to lobby', { exact: true }).click({ timeout: 30_000 })
+  await p.page.getByText('Leave lobby', { exact: true }).waitFor({ timeout: 60_000 })
+}
+const startable = (p) => p.page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Start match' && !b.disabled), null, { timeout: 60_000 })
+
+async function customLobby() {
+  const WIDE = { width: 1280, height: 720 }
+  const [c, d] = await Promise.all([newPage('c', WIDE), newPage('d', WIDE)])
+  for (const p of [c, d]) await p.page.getByText('Custom', { exact: true }).click({ timeout: 60_000 })
+  await c.page.getByText('No lobbies yet', { exact: true }).waitFor({ timeout: 30_000 })
+  say(`screenshot: ${await shot(c, 'lobbies-empty')}`)
+  await c.page.getByRole('button', { name: '+ Create lobby' }).first().click()
+  await c.page.getByLabel('Lobby name').fill('Browser lobby')
+  for (let i = 0; i < 2; i++) await c.page.getByRole('button', { name: 'More players' }).click()
+  await c.page.getByText('6 v 6', { exact: true }).waitFor({ timeout: 5000 })
+  say(`screenshot: ${await shot(c, 'create-drawer')}`)
+  await c.page.getByRole('button', { name: 'Advanced' }).click()
+  await c.page.getByText('Kill limit', { exact: true }).scrollIntoViewIfNeeded()
+  say(`screenshot: ${await shot(c, 'create-advanced')}`)
+  await c.page.getByRole('button', { name: 'Create lobby', exact: true }).click()
+  await c.page.getByText('Leave lobby', { exact: true }).waitFor({ timeout: 30_000 })
+  const code = (await c.page.locator('p.font-mono').textContent()).trim().replace('-', '')
+  check(/^[0-9A-Z]{8}$/.test(code), 'c made a lobby for 6 v 6 and is in its waiting room, the invite code shown')
+  await d.page.getByText('Browser lobby', { exact: true }).waitFor({ timeout: 10_000 })
+  say(`screenshot: ${await shot(d, 'lobbies-listed')}`)
+  check(true, 'd’s list shows the lobby, live')
+  await d.page.getByLabel('Invite code').fill(code.toLowerCase())
+  await d.page.getByLabel('Invite code').press('Enter')
+  await d.page.getByRole('button', { name: 'Ready', exact: true }).click({ timeout: 30_000 })
+  await startable(c)
+  say(`screenshots: ${await shot(c, 'waiting-owner')}, ${await shot(d, 'waiting-member')}`)
+  check(true, 'd joined by the code (typed in lower case) and readied: c’s Start is on at 2 of 12')
+
+  for (const round of [1, 2]) {
+    const from = performance.now()
+    await c.page.getByRole('button', { name: 'Start match' }).click()
+    await Promise.all([inMatch(c), inMatch(d)])
+    await d.page.waitForFunction(() => /2 people/.test(window.match.debug().find((text) => text.startsWith('ROOM'))), null, { timeout: 30_000 }).catch(() => {})
+    const [rc, rd] = [await room(c), await room(d)]
+    const seats = await c.page.evaluate(() => [window.match.combatants.length, window.match.combatants.filter((m) => m.present).length])
+    check(!!rc.id && rc.id === rd.id && rc.people === 2 && rd.people === 2 && seats[0] === 12 && seats[1] === 2, `match ${round}: both pages in one room, ${((performance.now() - from) / 1000).toFixed(0)} s after Start; ${seats[0]} seats, ${seats[1]} in play (${rc.line.trim()})`)
+    say(`screenshot: ${await shot(d, `match-${round}`)}`)
+    await backToLobby(d)
+    const running = await d.page.getByText('Match in progress').isVisible()
+    check(running, `match ${round}: d went back to the waiting room while the match runs on`)
+    say(`screenshot: ${await shot(d, `back-${round}`)}`)
+    await backToLobby(c)
+    if (round === 2) break
+    // nobody left in it: the match ends after 10 s, and the lobby waits again
+    await d.page.getByRole('button', { name: 'Ready', exact: true }).click({ timeout: 60_000 })
+    await startable(c)
+    check(true, 'both back, the match over by itself: d readies again and c can start again')
+  }
+
+  // a reload in the waiting room: straight back in (the tab remembers its lobby)
+  await c.page.reload()
+  await c.page.getByText('Leave lobby', { exact: true }).waitFor({ timeout: 180_000 })
+  say(`screenshot: ${await shot(c, 'reloaded-waiting')}`)
+  check(true, 'c reloaded in the waiting room and is back in it')
+
+  // the invite link, opened signed out: a guest of its own, straight into the lobby (waiting again: the empty match ended)
+  await c.page.getByRole('button', { name: 'Start match' }).waitFor({ timeout: 60_000 })
+  const e = await newPage('e', WIDE, `/?join=${code.toLowerCase().slice(0, 4)}-${code.toLowerCase().slice(4)}`)
+  await e.page.getByText('Leave lobby', { exact: true }).waitFor({ timeout: 180_000 })
+  const joined = await e.page.getByText('3 / 12', { exact: true }).isVisible()
+  say(`screenshot: ${await shot(e, 'joined-by-link')}`)
+  check(joined && !new URL(e.page.url()).searchParams.has('join'), 'e opened the invite link signed out: in the lobby as a guest (3 of 12), the link gone from the address bar')
+  await Promise.all([c, d, e].map((p) => p.context.close()))
+
+  const text = JSON.stringify(logs)
+  check(logs.some((line) => line.msg === 'lobby created') && logs.filter((line) => line.msg === 'room opened' && line.kind === 'custom').length === 2 && !text.includes(code) && minted.every((token) => !text.includes(token)), 'the server logged the lobby and its two rooms; no invite code or token in its logs')
+}
+
+// --- Classic: two searchers, one match ------------------------------------------------------------------------
+
+async function classicMatch() {
   const [a, b] = await Promise.all([open('a'), open('b')])
   await b.page.waitForFunction(() => /2 people/.test(window.match.debug().find((text) => text.startsWith('ROOM'))), null, { timeout: 30_000 }).catch(() => {})
   const [ra, rb] = [await room(a), await room(b)]
@@ -172,6 +269,10 @@ try {
   say(`screenshot: ${await shot(b, 'after-a-left')}`)
   const lines = logs.filter((line) => line.msg === 'joined' || line.msg === 'left')
   check(lines.filter((line) => line.msg === 'joined').length === 2 && lines.some((line) => line.msg === 'left') && minted.every((token) => !JSON.stringify(logs).includes(token)), `the server logged ${lines.map((line) => `${line.msg} ${line.name ?? line.uid.slice(0, 8)} seat ${line.seat}${line.queue ? ` queue p95 ${line.queue.p95}` : ''}`).join(', ')}; no token in its logs`)
+}
+
+try {
+  await (process.argv[2] === 'custom' ? customLobby() : classicMatch())
 } catch (error) {
   failures++
   say(`!!  ${error.message.split('\n')[0]}`)

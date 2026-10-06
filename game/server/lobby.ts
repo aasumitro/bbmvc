@@ -3,10 +3,11 @@ import type { Arena } from '../src/game/arena/arena'
 import type { Loadout } from '../src/game/loadout'
 import { MAPS, type MapId } from '../src/game/maps'
 import { MODES, type Mode } from '../src/game/modes'
-import { RATE, type ErrorCode, type Queueing } from '../src/net/protocol'
+import { RATE, type ErrorCode, type Lobbying, type Queueing } from '../src/net/protocol'
+import { createLobbies, LOBBIES, type LobbiesConfig } from './custom'
 import { createMatchmaker, MATCHMAKING, type MatchmakingConfig, type Proposal } from './matchmaker'
 import type { Records } from './records'
-import { createRoom, type Human, type Room } from './room'
+import { channel, createRoom, type Human, type Room, type RoomOptions } from './room'
 
 // Every room on the server, and who goes where. Classic is matchmaking: a
 // page opens a session (a hello with no map), searches for a mode on an
@@ -22,6 +23,12 @@ import { createRoom, type Human, type Room } from './room'
 // a session takes over an older session (the ticket is the player's, not the
 // tab's) and is refused while the user holds a seat. Rooms are capped; a
 // room nobody has been in for `grace` is closed.
+// A session may use custom lobbies instead (custom.ts): the list, a lobby,
+// its waiting room — not Classic's queue too (a lobby joined ends a ticket;
+// no ticket while in a lobby). A lobby's match gets a room of its own, its
+// members seated on the sockets they're in the lobby on; after its results
+// they're back in the lobby on the same sockets and the room closes. Custom
+// rooms and Classic's share MAX_ROOMS.
 
 export interface LobbyOptions {
   maxRooms: number
@@ -29,6 +36,7 @@ export interface LobbyOptions {
   results?: number // seconds of results between matches
   arenaFor?: (map: MapId) => Arena // what a room on `map` is played on (the netplay check's test yards); the map's own otherwise
   matchmaking?: Partial<MatchmakingConfig> // the checks' shorter windows
+  lobbies?: Partial<LobbiesConfig> // MAX_LOBBIES; the checks' shorter windows
   log?: (message: string, fields?: Record<string, unknown>) => void
   records?: Records // where finished matches and rooms' replays are kept (MATCH_DIR); none: nothing is kept
 }
@@ -54,7 +62,8 @@ export interface Searcher {
   send: Human['send']
   close: Human['close']
   seat(room: Room, human: Human): void // from now on the socket is that seat's
-  heard: number // ms: the last time the session had a ticket (or opened)
+  release(): void // a custom lobby's match is over for them: the socket is the session's again
+  heard: number // ms: the last time the session had a ticket, a lobby or the list (or opened)
 }
 
 export type Joined = { room: Room; human: Human } | { error: ErrorCode; text: string }
@@ -63,7 +72,7 @@ const IDLE = 60_000 // ms a session may go without a ticket before it's let go
 
 export type Lobby = ReturnType<typeof createLobby>
 
-export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, matchmaking, log = () => {}, records }: LobbyOptions) {
+export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, matchmaking, lobbies: lobbyConfig, log = () => {}, records }: LobbyOptions) {
   const rooms: Room[] = []
   const replays = new Map<Room, ReturnType<Records['replay']>>() // each room's, open while it runs
   const seated = new Map<string, { room: Room; human: Human }>() // by user id
@@ -82,11 +91,11 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
     config,
   )
 
-  function open(mode: Mode, map: MapId, build: string, hold = -1) {
+  function open(mode: Mode, map: MapId, build: string, hold = -1, custom: Partial<RoomOptions> = {}) {
     const id = randomBytes(3).toString('hex')
     const created = Date.now()
     const replay = records?.replay(id, created)
-    const room = createRoom({ id, mode, map, build, hold, results, arena: arenaFor?.(map), log, created, record: records?.match, journal: replay?.write })
+    const room = createRoom({ id, mode, map, build, hold, results, arena: arenaFor?.(map), log, created, record: records?.match, journal: replay?.write, ...custom })
     rooms.push(room)
     if (replay) replays.set(room, replay)
     return room
@@ -123,8 +132,73 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
     Object.hasOwn(MODES, mode) && Object.hasOwn(MAPS, map) && MAPS[map as MapId].modes.includes(mode as Mode) ? [mode as Mode, map as MapId] : null
 
   function leave(room: Room, human: Human, now: number) {
-    room.leave(human, now)
+    if (rooms.includes(room)) room.leave(human, now) // a room already closed (a lobby's match over, the server stopping) has nothing left to leave
     if (seated.get(human.uid)?.human === human) seated.delete(human.uid)
+  }
+
+  // --- custom lobbies -------------------------------------------------------------------------
+
+  const over: Array<{ room: Room; winner: number | null | undefined }> = [] // custom rooms whose match ended this step
+  const custom = createLobbies(
+    {
+      now: () => time,
+      tell: (uid, lobby, note) => searchers.get(uid)?.send(JSON.stringify({ t: 'lb', lobby, ...(note && { note }) })),
+      show(uids, list) {
+        const text = JSON.stringify({ t: 'lbs', list })
+        for (const uid of uids) searchers.get(uid)?.send(text)
+      },
+      hosts: (mode, map) => !!hosts(mode, map),
+      channel,
+      start(l, plan) {
+        if (rooms.length >= maxRooms) return null
+        const room = open(l.mode, l.map as MapId, '', Math.round((config.loadTimeoutMs / 1000) * RATE.step), { lobby: l.id, plan, chat: l.chat, settings: l.settings, over: (winner) => over.push({ room, winner }), idle: (human) => custom.act(human.uid, human.name, { t: 'lb', do: 'wait' }) })
+        log('room opened', { room: room.id, kind: 'custom', lobby: l.id, mode: l.mode, map: l.map, rooms: rooms.length, humans: plan.filter((s) => s && 'uid' in s).length, bots: plan.filter((s) => s && 'skill' in s).length })
+        plan.forEach((seat, i) => seat && 'uid' in seat && place(room, seat.uid, i))
+        return room.id
+      },
+      seat(l, uid) {
+        const room = rooms.find((r) => r.id === l.room)
+        return !!room && place(room, uid, l.members.get(uid)?.slot ?? -1)
+      },
+      unseat(_, uid) {
+        const s = seated.get(uid)
+        if (!s?.room.lobby) return
+        leave(s.room, s.human, time)
+        searchers.get(uid)?.release()
+      },
+      end(l) {
+        const room = rooms.find((r) => r.id === l.room)
+        if (room) finish(room)
+      },
+      left: (l) => rooms.find((r) => r.id === l.room)?.mode.rules.remaining() ?? 0,
+      log,
+    },
+    { ...LOBBIES, ...lobbyConfig },
+  )
+
+  // A member into their slot's seat in the lobby's room, on the socket they're in the lobby on.
+  function place(room: Room, uid: string, seat: number) {
+    const session = searchers.get(uid)
+    if (!session || seated.has(uid)) return false
+    const human = room.join(session, time, seat)
+    if (!human) return false
+    seated.set(uid, { room, human })
+    session.seat(room, human)
+    return true
+  }
+
+  // A custom room is done (its match over, or its lobby gone): its people are
+  // back on their sockets as lobby members, and it closes.
+  function finish(room: Room) {
+    for (const human of room.humans) {
+      if (seated.get(human.uid)?.human === human) seated.delete(human.uid)
+      searchers.get(human.uid)?.release()
+    }
+    const at = rooms.indexOf(room)
+    if (at < 0) return
+    rooms.splice(at, 1)
+    void close(room)
+    log('room closed', { room: room.id, kind: 'custom', rooms: rooms.length })
   }
 
   return {
@@ -171,6 +245,15 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
       mm.reconnect(searcher.uid)
       return null
     },
+    // What a session asks of custom lobbies. False: nothing a working page would send (a strike).
+    lobbies(searcher: Searcher, message: Lobbying, now: number) {
+      time = now
+      const { uid } = searcher
+      if (searchers.get(uid) !== searcher) return true // let go already
+      const ok = custom.act(uid, searcher.name, message)
+      if (custom.memberOf(uid) && mm.ticketOf(uid)) mm.cancel(uid) // a lobby or Classic's queue, not both
+      return ok
+    },
     // What a session asks. False: nothing the lobby knows (a strike).
     queue(searcher: Searcher, message: Queueing, now: number) {
       time = now
@@ -178,32 +261,40 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
       if (searchers.get(uid) !== searcher) return true // let go already: its word no longer counts
       if (message.do === 'search') {
         if (!hosts(message.mode, message.map)) return false
-        mm.search(uid, message.mode, message.map, searcher.build)
+        if (custom.memberOf(uid)) mm.tell(uid) // in a lobby: no ticket
+        else mm.search(uid, message.mode, message.map, searcher.build)
       } else if (message.do === 'cancel') mm.cancel(uid)
       else if (message.do === 'state') mm.tell(uid)
       else mm.respond(uid, message.id, message.do === 'accept')
       return true
     },
-    // A session's socket closed: a ticket it had waits a while for the player (matchmaker.ts).
+    // A session's socket closed: a ticket it had waits a while for the
+    // player (matchmaker.ts); so does their lobby slot (custom.ts).
     exit(searcher: Searcher, now: number) {
       time = now
       if (searchers.get(searcher.uid) !== searcher) return
       searchers.delete(searcher.uid)
       mm.disconnect(searcher.uid)
+      custom.drop(searcher.uid)
     },
     // One fixed step for every room, then matchmaking; rooms empty for longer
     // than `grace` close, and sessions that have gone a minute without a ticket.
     step(now: number) {
       time = now
       for (const room of rooms) room.step(now)
+      for (const { room, winner } of over.splice(0)) {
+        finish(room)
+        custom.over(room.lobby!, winner)
+      }
       mm.tick()
+      custom.tick()
       for (const s of searchers.values()) {
-        if (mm.ticketOf(s.uid)) s.heard = now
+        if (mm.ticketOf(s.uid) || custom.memberOf(s.uid) || custom.watching(s.uid)) s.heard = now
         else if (now - s.heard > IDLE) s.close('idle', 'No search for a minute')
       }
       for (let i = rooms.length - 1; i >= 0; i--) {
         const room = rooms[i]
-        if (room.humans.length || now - room.emptySince < grace) continue
+        if (room.lobby || room.humans.length || now - room.emptySince < grace) continue // a custom room closes with its match
         rooms.splice(i, 1)
         void close(room)
         log('room closed', { room: room.id, rooms: rooms.length })
@@ -212,6 +303,7 @@ export function createLobby({ maxRooms, grace = 30_000, results, arenaFor, match
     humans: () => rooms.reduce((sum, room) => sum + room.humans.length, 0),
     searching: () => mm.searching(),
     matchmaker: mm,
+    custom,
     // Every room closed; resolves once their replays are on disk.
     dispose() {
       const closing = rooms.map(close)

@@ -45,6 +45,17 @@ const CONTROLS = [
     ],
   },
   {
+    title: 'Custom lobbies',
+    rows: [
+      { keys: ['↑', '↓'], action: 'Choose a lobby' },
+      { keys: ['Enter'], action: 'Join; waiting room: Ready (owner: Start)' },
+      { keys: ['C'], action: 'Create a lobby' },
+      { keys: ['/'], action: 'Search the list' },
+      { keys: ['T'], action: 'Lobby chat (waiting room)' },
+      { keys: ['Esc'], action: 'Modes; waiting room: leave (asks first)' },
+    ],
+  },
+  {
     title: 'Menus',
     rows: [
       { keys: ['↑', '↓'], action: 'Choose' },

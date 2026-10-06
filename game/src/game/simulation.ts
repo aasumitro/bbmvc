@@ -46,6 +46,7 @@ export interface Combatant {
   health: number
   maxHealth: number
   alive: boolean
+  present: boolean // in play; false: an empty seat (a custom room's) — its body out of the world, never alive, nothing drawn
   deadFor: number // seconds since destroyed
   stats: Stats // kills, deaths and the rest, kept by the mode's rules
   weapon: WeaponState
@@ -136,6 +137,7 @@ export function enlist(world: RAPIER.World, id: number, { name, team, seed, spaw
     health: spec.armour,
     maxHealth: spec.armour,
     alive: true,
+    present: true,
     deadFor: 0,
     stats: createStats(),
     weapon: armWeapon(weapon),
@@ -193,6 +195,7 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
     const held = rules.phase === 'preMatch' // lined up on the grid: nobody moves or shoots yet
     for (const c of combatants) if (c.brain && c.alive && live && !held) think(c, combatants, world, arena.nav, dt, random, mode.plan)
     for (const c of combatants) {
+      if (!c.present) continue
       c.last.position.copy(c.position)
       c.last.rotation.copy(c.rotation)
       c.last.velocity.copy(c.velocity)
@@ -208,6 +211,7 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
     }
     world.step()
     for (const c of combatants) {
+      if (!c.present) continue
       readPose(c)
       c.crashCooldown -= dt
       const joltX = c.velocity.x - c.last.velocity.x
@@ -278,7 +282,7 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
     if (!castAt?.(c, muzzle, shot, random)) castRound(world, c.weapon.spec, muzzle, c.control.aim, c.car.body, shot, random)
     const victim = shot.collider ? combatantOf(shot.collider) : undefined
     events.shot(c, muzzle, shot, victim)
-    if (victim && hostile(victim, c)) damage(victim, c.weapon.spec.damage, c)
+    if (victim) damage(victim, c.weapon.spec.damage, c)
   }
 
   // Rockets fly straight at their speed; each step sweeps a ray along the
@@ -312,7 +316,7 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
   }
 
   // Damage and shove fall off linearly to nothing at the blast edge; a direct
-  // hit deals the full warhead. Only hostiles take damage, every car is shoved.
+  // hit deals the full warhead. Every car is shoved; the rules say who is hurt.
   const shove = new THREE.Vector3()
   function detonate(rocket: Rocket, struck?: Combatant) {
     const { blast } = rocket.spec.rocket!
@@ -326,17 +330,19 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
       shove.normalize()
       shove.y = Math.max(shove.y, 0.3) // lifts as well as pushes, so the car rocks over
       c.car.body.applyImpulse(shove.normalize().multiplyScalar(c.car.handling.mass * BLAST_SHOVE * falloff), true)
-      if (hostile(c, rocket.shooter)) damage(c, rocket.spec.damage * falloff, rocket.shooter)
+      damage(c, rocket.spec.damage * falloff, rocket.shooter)
     }
   }
 
+  // Every hit goes to the rules, the one place that says whether it hurts:
+  // never the shooter's own machine, a teammate only if the mode allows it.
   function damage(victim: Combatant, amount: number, attacker: Combatant) {
     if (!victim.alive) return
     const dealt = rules.damage(attacker.id, victim.id, amount) // protection (boosts, armor); wrecks hurt no one; nothing outside play
     if (dealt <= 0) return
     victim.health = Math.max(0, victim.health - dealt)
     events.hurt(victim, attacker)
-    if (victim.brain) provoke(victim.brain, attacker)
+    if (victim.brain && hostile(victim, attacker)) provoke(victim.brain, attacker) // a teammate's stray round never turns a bot
     if (victim.health === 0) destroy(victim, attacker)
   }
 
@@ -354,12 +360,29 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
 
   // --- respawn -------------------------------------------------------------
 
-  // Back in at the start the rules pick, once they agree.
+  // Back in at the start the rules pick, once they agree (an empty seat just
+  // taken comes back into the world there).
   function respawn(c: Combatant) {
     const start = rules.pickSpawn(c.id, sees)
     if (!rules.respawned(c.id, start)) return
     reset(c, mode.starts[start])
+    if (!c.present) intoPlay(c)
     events.respawned(c)
+  }
+
+  // Into play, or out of it: the body joins the world or leaves it (a
+  // disabled body's colliders leave too, so rays, blasts and cars pass
+  // where it stood).
+  function intoPlay(c: Combatant) {
+    c.present = true
+    c.car.body.setEnabled(true)
+  }
+  function outOfPlay(c: Combatant) {
+    c.present = false
+    c.alive = false
+    c.deadFor = 0
+    Object.assign(c.control, { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false })
+    c.car.body.setEnabled(false)
   }
 
   // A clear line from a rival's gun to a car at `at`; only the static world blocks it.
@@ -378,14 +401,27 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
   return {
     step,
     combatantOf,
-    // Everyone back where they lined up, whole; nothing left in the air; randomness from the new `seed`.
+    // Everyone back where they lined up, whole, the empty seats' machines
+    // too (as their rules start over); nothing left in the air; randomness
+    // from the new `seed`.
     restart(seed: number) {
       random = stream(seed)
       rockets.length = 0
       for (const c of combatants) {
         reset(c)
+        if (!c.present) intoPlay(c)
         events.respawned(c)
       }
+    },
+    // A seat nobody holds (a custom room's): its machine out of play where
+    // it stands — no wreck, no kill — until someone takes the seat.
+    vacate(c: Combatant) {
+      if (c.present && rules.leave(c.id)) outOfPlay(c)
+    },
+    // Someone takes the empty seat: back in on the next step, at the start
+    // the rules pick, protected (the respawn brings the body back).
+    occupy(c: Combatant) {
+      if (!c.present) rules.enter(c.id)
     },
     // The match is over: the bots stand down where they are.
     standDown() {

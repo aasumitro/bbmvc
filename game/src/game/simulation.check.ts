@@ -2,12 +2,13 @@
 // sound, DOM or local player — the code the browser runs, on a flat test
 // yard, controls written by hand. Covers the pre-match hold, hitscan and
 // rocket damage, wrecks and scoring, respawns, the result, the restart,
-// replaying a bots-only match from its seed, and the content registries'
-// numbers. Run: node src/game/simulation.check.ts
+// replaying a bots-only match from its seed, whole Classic matches pinned by
+// hash, and the content registries' numbers. Run: node src/game/simulation.check.ts
 import * as THREE from 'three'
 import type { Arena, SpawnPoint } from './arena/arena.ts'
 import { WEAPONS } from './combat.ts'
 import { createFfaMode, lineUp as ffaLineUp } from './ffa/mode.ts'
+import { classic, type MatchSettings } from './matchSettings.ts'
 import type { Feed } from './mode.ts'
 import { createWorld, initPhysics, PHYSICS_STEP } from './physics.ts'
 import { createSimulation, enlist, type Combatant } from './simulation.ts'
@@ -43,13 +44,14 @@ const arena: Arena = {
 }
 
 // A match as the runtime seats it, with what it reports. No bots unless
-// asked: the check drives.
-function setup(kind: 'tdm' | 'ffa', { seed = 1, bots = false } = {}) {
+// asked: the check drives. Classic's settings on the yard unless said.
+function setup(kind: 'tdm' | 'ffa', { seed = 1, bots = false, settings = classic(kind) as MatchSettings, yard = arena } = {}) {
+  const arena = yard
   const world = createWorld(arena.colliders)
-  const seats = kind === 'tdm' ? tdmLineUp(arena) : ffaLineUp(arena)
+  const seats = kind === 'tdm' ? tdmLineUp(arena, settings.size) : ffaLineUp(arena, settings.size)
   const combatants = seats.map(({ team, spawn }, id) => enlist(world, id, { name: `car${id}`, team, seed: id + 1, spawn, vehicle: 'razor', weapon: WEAPONS.minigun, bot: bots }))
-  const mode = kind === 'tdm' ? createTdmMode(combatants, arena) : createFfaMode(combatants, arena, world, seed)
-  const heard = { fired: 0, shot: 0, burst: 0, hurt: 0, wrecked: [] as string[], respawned: [] as number[] }
+  const mode = kind === 'tdm' ? createTdmMode(combatants, arena, world, seed, settings) : createFfaMode(combatants, arena, world, seed, settings)
+  const heard = { fired: 0, shot: 0, burst: 0, hurt: 0, struck: [] as number[], wrecked: [] as string[], respawned: [] as number[] }
   const sim = createSimulation({
     world,
     arena,
@@ -58,7 +60,10 @@ function setup(kind: 'tdm' | 'ffa', { seed = 1, bots = false } = {}) {
     seed,
     events: {
       fired: () => heard.fired++,
-      shot: () => heard.shot++,
+      shot(_c, _muzzle, _shot, victim) {
+        heard.shot++
+        if (victim) heard.struck.push(victim.id)
+      },
       rocket() {},
       burst: () => heard.burst++,
       hurt: () => heard.hurt++,
@@ -74,6 +79,7 @@ function setup(kind: 'tdm' | 'ffa', { seed = 1, bots = false } = {}) {
     me: 0,
     name: (id) => `car${id}`,
     kill: ({ killer, victim }) => lines.push(`kill ${killer}>${victim}`),
+    teamKill: (killer, victim) => lines.push(`teamkill ${killer}>${victim}`),
     death: (victim) => lines.push(`death ${victim}`),
     phase: (phase) => lines.push(`phase ${phase}`),
     news: (text) => lines.push(text),
@@ -170,19 +176,134 @@ function duel(combatants: readonly Combatant[], a: Combatant, b: Combatant) {
   m.world.free()
 }
 
+// --- an empty seat -----------------------------------------------------------------------
+
+// A seat nobody holds (a custom room's): its machine out of play where it
+// stands — no wreck, no kill — its body out of the world, left out of the
+// standings; taken, it's back in on the next step at a start the rules
+// pick, protected.
+{
+  const m = setup('ffa')
+  m.run(4, () => m.mode.rules.phase === 'active')
+  const ffa = m.mode.kind === 'ffa' ? m.mode.rules : null
+  const [me, gone] = [m.combatants[0], m.combatants[3]]
+  duel(m.combatants, me, gone)
+  const said = m.lines.length
+  m.sim.vacate(gone)
+  check(!gone.present && !gone.alive && m.mode.rules.contenders[3].life === 'absent' && gone.stats.deaths === 0 && m.lines.length === said && !m.heard.wrecked.length, 'an empty seat: out of play, quietly')
+  check(!!ffa && !ffa.standings().includes(3) && ffa.standings().length === 7, 'left out of the standings')
+  m.run(2)
+  check(m.heard.fired > 10 && !m.heard.struck.length && m.heard.hurt === 0, `rounds pass where it stood: its body is out of the world (${m.heard.fired} fired)`)
+  check(!m.mode.rules.respawnDue(3) && !gone.alive, 'never due back by itself')
+  me.control.fire = false
+  m.sim.occupy(gone)
+  m.run(PHYSICS_STEP)
+  check(gone.present && gone.alive && m.mode.rules.contenders[3].life === 'protected' && m.heard.respawned.includes(3), 'taken: back in on the next step, protected')
+  check(m.mode.starts.some((s) => s.position.distanceTo(gone.position) < 0.5) && !!ffa?.standings().includes(3), 'on a start the rules picked, in the standings again')
+  m.world.free()
+}
+
+// --- a custom lobby's settings ----------------------------------------------------------------
+
+// Sizes: two machines and twelve, each on its own start (twelve need a bigger
+// yard: sixteen spawns, six starts a base).
+const bigYard: Arena = {
+  ...arena,
+  spawns: ring(100, 16).map(([x, z]) => start(x, z, Math.atan2(-x, -z))),
+  bases: [[-25, -15, -5, 5, 15, 25].map((x) => start(x, -120, 0)), [-25, -15, -5, 5, 15, 25].map((x) => start(x, 120, Math.PI))],
+}
+for (const kind of ['ffa', 'tdm'] as const) {
+  for (const size of [2, 12]) {
+    const m = setup(kind, { bots: true, yard: bigYard, settings: { ...classic(kind), size } })
+    const starts = new Set(m.combatants.map((c) => `${c.spawn.position.x},${c.spawn.position.z}`))
+    check(m.combatants.length === size && starts.size === size, `${kind}, ${size} machines: each on its own start`)
+    check(kind === 'ffa' || m.combatants.every((c, i) => c.team === (i < size / 2 ? 0 : 1)), `${kind}, ${size}: half a side, the first half blue`)
+    m.run(30)
+    const dealt = m.combatants.reduce((sum, c) => sum + c.stats.damageDealt, 0)
+    check(m.mode.rules.phase === 'active' && (size === 2 || dealt > 0), `${kind}, ${size} machines: 30 s of bots playing (${Math.round(dealt)} hull dealt)`)
+    check(m.mode.kind !== 'ffa' || m.mode.rules.standings().length === size, `${kind}, ${size}: every machine in the standings`)
+    m.world.free()
+  }
+}
+
+// Duration: the buzzer at five minutes (nobody scored: tied, so overtime).
+{
+  const m = setup('ffa', { settings: { ...classic('ffa'), duration: 300 } })
+  m.run(4, () => m.mode.rules.phase === 'active')
+  Object.assign(m.mode.rules, { now: 3 + 300 - 0.2 })
+  m.run(1)
+  check(m.mode.rules.phase === 'overtime' && m.mode.rules.remaining() === 0, 'five minutes: the clock runs out at 5:00')
+  m.world.free()
+}
+
+// Friendly fire, through the simulation: off, a teammate's rounds pass
+// harmlessly; on, they wreck it — a team kill — and nobody's own rocket
+// ever hurts them.
+{
+  const off = setup('tdm')
+  off.run(4, () => off.mode.rules.phase === 'active')
+  duel(off.combatants, off.combatants[0], off.combatants[1])
+  off.run(2)
+  check(off.heard.fired > 10 && off.heard.hurt === 0 && off.combatants[1].health === off.combatants[1].maxHealth, 'friendly fire off: a teammate takes no hit')
+  off.world.free()
+
+  const m = setup('tdm', { settings: { ...classic('tdm'), friendlyFire: true } })
+  m.run(4, () => m.mode.rules.phase === 'active')
+  const [me, mate] = [m.combatants[0], m.combatants[1]]
+  duel(m.combatants, me, mate)
+  m.run(10, () => !mate.alive)
+  const tdm = m.mode.kind === 'tdm' ? m.mode.rules : null
+  check(!mate.alive && tdm?.score.join() === '-1,0' && me.stats.teamKills === 1 && me.stats.kills === 0 && m.lines.includes('teamkill 0>1'), 'friendly fire on: the minigun wrecks a teammate, a team kill, fed as one')
+  me.weapon = { spec: WEAPONS.rocketPod, ammo: 6, cooldown: 0, reload: 0 }
+  me.control.aim.set(me.position.x, 0, me.position.z + 4) // the ground just ahead
+  const bursts = m.heard.burst
+  m.run(1, () => m.heard.burst > bursts)
+  me.control.fire = false
+  check(m.heard.burst > bursts && me.health === me.maxHealth, 'a rocket bursting at its own nose never hurts the shooter')
+  m.world.free()
+}
+
+// Pickups in team deathmatch: turned on, the supply plugs in and a wave lands at 2:00; off, there's none.
+{
+  const m = setup('tdm', { bots: true, settings: { ...classic('tdm'), items: { health: true, ammo: true, powerups: true } } })
+  m.run(126)
+  const collected = m.combatants.reduce((sum, c) => sum + c.stats.itemsCollected, 0)
+  check(!!m.mode.supply && m.mode.supply.items.length + collected > 0, `team deathmatch with pickups: a wave by 2:00 (${m.mode.supply?.items.length} on the ground, ${collected} picked up)`)
+  m.world.free()
+  const bare = setup('tdm')
+  check(!bare.mode.supply, 'team deathmatch without them: no supply at all')
+  bare.world.free()
+}
+
 // --- determinism -------------------------------------------------------------------------
 
-// Bots only, no hand on the controls: the seed is the whole match.
-function replay(seed: number) {
-  const m = setup('ffa', { seed, bots: true })
-  m.run(30)
-  const state = JSON.stringify(m.combatants.map((c) => [c.position.toArray(), c.health, c.stats, c.weapon.ammo]))
+// Bots only, no hand on the controls: the seed is the whole match. Runs
+// `seconds`, or until the match ends.
+function replay(kind: 'tdm' | 'ffa', seed: number, seconds: number) {
+  const m = setup(kind, { seed, bots: true })
+  m.run(seconds, () => m.mode.outcome() !== undefined)
+  const state = JSON.stringify(m.combatants.map((c) => [c.position.toArray(), c.rotation.toArray(), c.health, c.alive, c.stats, c.weapon.ammo]))
   m.world.free()
   return state
 }
-const first = replay(7)
-check(first === replay(7), 'the same seed replays the same match, to the last bit')
-check(first !== replay(8), 'another seed, another match')
+const first = replay('ffa', 7, 30)
+check(first === replay('ffa', 7, 30), 'the same seed replays the same match, to the last bit')
+check(first !== replay('ffa', 8, 30), 'another seed, another match')
+
+// Classic as it played before the custom lobbies (.claude/work/custom/PLAN.md
+// 5.6): a whole match of bots in each mode (item waves, every respawn wait,
+// the buzzer; free for all's goes to overtime), hashed. The refactor leaves
+// them as they are; play changed on purpose changes them here. On the real
+// arenas: server.check.ts.
+const GOLDEN = [
+  ['tdm', '3ec7416629c569b3'],
+  ['ffa', 'd457463001e9f922'],
+] as const
+for (const [kind, pinned] of GOLDEN) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(replay(kind, 7, 700)))
+  const played = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16)
+  check(played === pinned, `${kind}: a whole match of bots plays as before (${pinned}, played ${played})`)
+}
 
 // --- content ---------------------------------------------------------------------------
 

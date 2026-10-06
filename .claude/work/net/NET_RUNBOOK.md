@@ -58,8 +58,8 @@ equal what the server's check prints for that map:
 
 | Map | Digest |
 |---|---|
-| Scrapyard | `b0ce6b61` |
-| The City | `9896c223` |
+| Scrapyard | `227c4ce7` |
+| The City | `8913ad26` |
 
 To print them yourself:
 
@@ -153,7 +153,7 @@ needs Nakama and the game server up.
 node scripts/match-smoke.mjs
 ```
 
-It prints `ok  scrapyard: seated in room …, arena b0ce6b61 as expected, build …`, the same for `city`, and `ok  cleanup: the guest deleted`.
+It prints `ok  scrapyard: seated in room …, arena 227c4ce7 as expected, build …`, the same for `city`, and `ok  cleanup: the guest deleted`.
 
 ## 8. Deploy config
 

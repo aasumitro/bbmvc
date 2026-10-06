@@ -16,12 +16,13 @@ export const TDM = {
   overtimeCap: 5 * 60, // safety bound, not a rule: overtime still tied after this ends as a draw
 
   respawn: {
-    // Wait, fixed by the elapsed time at the moment of death (as free for all).
+    // Wait, fixed by the share of the match clock gone at the moment of death
+    // (as free for all); a match's settings scale it.
     phases: [
-      { before: 3 * 60, delay: 5 },
-      { before: 5 * 60, delay: 10 },
-      { before: 8 * 60, delay: 15 },
-      { before: Infinity, delay: 20 },
+      { share: 0.3, delay: 5 },
+      { share: 0.5, delay: 10 },
+      { share: 0.8, delay: 15 },
+      { share: Infinity, delay: 20 },
     ],
     overtime: 5, // deaths in overtime; longer waits carried into overtime are cut to this from its start
   },
@@ -59,8 +60,8 @@ export const TDM = {
     { kills: 10, title: 'Godlike' },
   ],
   shutdown: 3, // killing a machine on a streak this long is a shutdown
-  // Combat score: decides MVP, never the team result. No item points: TDM has no items.
-  score: { kill: 100, assist: 50, damage: 0.5, multiKill: 25, streak: 25, revenge: 25 }, // damage: per hull point dealt; multiKill: per extra kill in the chain
+  // Combat score: decides MVP, never the team result. Items only when a match turns pickups on.
+  score: { kill: 100, assist: 50, damage: 0.5, multiKill: 25, streak: 25, revenge: 25, item: 10 }, // damage: per hull point dealt; multiKill: per extra kill in the chain
 
   // Team AI (tactics.ts). Biases are metres an enemy counts as nearer when a bot picks a target.
   bots: {

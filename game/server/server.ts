@@ -7,6 +7,7 @@ import { PHYSICS_STEP } from '../src/game/physics'
 import { createRng } from '../src/game/rng'
 import { BUILD, LIMITS, parseClient, PROTOCOL, wireSize, type ErrorCode, type Hello, type ServerMessage } from '../src/net/protocol'
 import { playerName, verifyToken } from './auth'
+import type { LobbiesConfig } from './custom'
 import { createLobby, type Searcher } from './lobby'
 import type { MatchmakingConfig } from './matchmaker'
 import { createRecords } from './records'
@@ -20,8 +21,10 @@ import { queueDepth, type Human, type Room } from './room'
 // and a cap on what may wait to go out to a page that has stopped reading —
 // and passes what a player may send (controls, aim, the tick it sees) to
 // their room; before a player has a seat, what they ask of Classic's
-// matchmaking goes to the lobby (a hello with no map: lobby.ts). Logs are
-// JSON lines, with user ids, never tokens.
+// matchmaking or of custom lobbies goes to the lobby (a hello with no map:
+// lobby.ts). A custom lobby's match is on the same socket as the lobby, and
+// the socket goes back to the lobby once the match is over. Logs are JSON
+// lines, with user ids, never tokens, invite codes or passwords.
 
 export interface ServerOptions {
   port: number | string // 0: any free port (the checks); a path: a Unix socket (the checks' slow reader)
@@ -41,6 +44,7 @@ export interface ServerOptions {
   results?: number // seconds of results between matches
   arenaFor?: (map: MapId) => Arena // the checks' test yards
   matchmaking?: Partial<MatchmakingConfig> // the checks' shorter windows
+  lobbies?: Partial<LobbiesConfig> // MAX_LOBBIES; the checks' shorter windows
   log?: (line: Record<string, unknown>) => void
   records?: { dir: string; days: number } // keep every match's record and each room's replay there (records.ts); none: nothing is kept
 }
@@ -66,7 +70,7 @@ export function createGameServer(options: ServerOptions) {
   const { key, origins, maxRooms, trustProxy = false, lag = 0, jitter = 0, perAddress = 8, hello: helloWait = 5000, backlog = BACKLOG, build = BUILD, strict = false } = options
   const log = (msg: string, fields: Record<string, unknown> = {}) => (options.log ?? ((line) => console.log(JSON.stringify(line))))({ time: new Date().toISOString(), msg, ...fields })
   const records = options.records && createRecords({ ...options.records, log })
-  const lobby = createLobby({ maxRooms, grace: options.grace, results: options.results, arenaFor: options.arenaFor, matchmaking: options.matchmaking, log, records })
+  const lobby = createLobby({ maxRooms, grace: options.grace, results: options.results, arenaFor: options.arenaFor, matchmaking: options.matchmaking, lobbies: options.lobbies, log, records })
   const wobble = createRng(0x51ed) // the jitter (network conditions, not gameplay)
   const delayed = lag > 0 || jitter > 0 || !!options.stall
 
@@ -101,7 +105,7 @@ export function createGameServer(options: ServerOptions) {
   const http = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-      return res.end(JSON.stringify({ ok: true, protocol: PROTOCOL, build, rooms: lobby.rooms.length, humans: lobby.humans(), searching: lobby.searching(), uptime: Math.round((performance.now() - started) / 1000) }))
+      return res.end(JSON.stringify({ ok: true, protocol: PROTOCOL, build, rooms: lobby.rooms.length, custom: lobby.rooms.filter((r) => r.lobby).length, lobbies: lobby.custom.lobbies.size, humans: lobby.humans(), searching: lobby.searching(), uptime: Math.round((performance.now() - started) / 1000) }))
     }
     res.writeHead(404).end()
   })
@@ -133,7 +137,7 @@ export function createGameServer(options: ServerOptions) {
     const opened = performance.now()
     let room: Room | null = null
     let human: Human | null = null
-    let session: Searcher | null = null // matchmaking, until the lobby seats it
+    let session: Searcher | null = null // matchmaking or custom lobbies, until the lobby seats it (a custom lobby's member keeps it through the match)
     let uid = ''
     let greeted = false
     let closing = false
@@ -198,13 +202,15 @@ export function createGameServer(options: ServerOptions) {
       uid = identity.uid
       const name = playerName(identity, message.guest)
       const seated = (r: Room, h: Human) => {
-        ;[room, human, session] = [r, h, null]
-        log('joined', { uid, name: h.name, room: r.id, mode: r.kind, map: r.map, seat: h.seat, ip })
+        ;[room, human] = [r, h]
+        if (!r.lobby) session = null // Classic: the socket is the seat's for good
+        log('joined', { uid, name: h.name, room: r.id, mode: r.kind, map: r.map, seat: h.seat, ip, ...(r.lobby && { lobby: r.lobby }) })
       }
       if (!message.map) {
-        // Classic: a matchmaking session; the lobby seats it when the matcher finds a match
-        session = { uid, name, build: message.build, loadout: message.loadout, send, close: fail, seat: seated, heard: 0 }
-        const refused = lobby.enter(session, performance.now())
+        // a session: Classic's matchmaking (the lobby seats it when the matcher finds a match) or custom lobbies
+        const opened: Searcher = { uid, name, build: message.build, loadout: message.loadout, send, close: fail, seat: seated, release: () => void ([room, human] = [null, null]), heard: 0 }
+        session = opened
+        const refused = lobby.enter(opened, performance.now())
         if (refused) {
           session = null
           return fail(refused.error, refused.text)
@@ -230,11 +236,15 @@ export function createGameServer(options: ServerOptions) {
         case 'hello':
           return strike('second hello')
         case 'in':
-          if (!room || !human || !room.input(human, message, now)) strike('input out of order')
+          if (!room || !human) return session ? undefined : strike('input without a seat') // a custom match just over: inputs still on their way
+          if (!room.input(human, message, now)) strike('input out of order')
           return
         case 'mm':
           if (session && !lobby.queue(session, message, now)) strike('bad queue message')
           return // seated already: a late word to the queue changes nothing
+        case 'lb':
+          if (!session || !lobby.lobbies(session, message, now)) strike('bad lobby message')
+          return
         case 'ping':
           return tell({ t: 'pong', c: message.c, k: room?.tick ?? 0 })
         case 'bye':
@@ -252,7 +262,8 @@ export function createGameServer(options: ServerOptions) {
       if (room && human) {
         lobby.leave(room, human, performance.now())
         log('left', { uid, room: room.id, seat: human.seat, seconds: Math.round((performance.now() - opened) / 1000), sentKB: Math.round(bytes / 1024), repeats: human.repeats, drops: human.drops, queue: queueDepth(human) })
-      } else if (session) lobby.exit(session, performance.now())
+      }
+      if (session) lobby.exit(session, performance.now()) // a custom lobby's member: their slot waits for them a while
     })
     ws.on('error', (error) => log('socket error', { uid, ip, error: error.message }))
   }

@@ -2,6 +2,17 @@ import { useState } from 'react'
 
 const ENTRIES = [
   {
+    version: '0.12.0',
+    notes: [
+      'Custom lobbies, under the modes on the Arena screen: the list of public lobbies (search by lobby or host, filters for mode, arena and open slots, a lock on those with a password), Join by code, or Create lobby — public, with or without a password, or invite only',
+      'The owner sets the match: mode, arena, 2 to 12 machines (1 v 1 to 6 v 6 in Team Deathmatch), 5 to 30 minutes, join in progress; under Advanced, respawn speed, friendly fire (a team kill costs the team a point, and a TK column shows who), pickups (in Team Deathmatch too), one gun for everyone, a kill limit',
+      'Invite with the code or the link: it skips the password, and opened signed out it plays as a guest. No bots unless the owner adds them, at Easy, Normal or Hard; the owner also edits the settings, hands the lobby on, kicks (no way back in), or resets the code',
+      'The waiting room: Ready up (Enter), change side in Team Deathmatch by clicking an open slot, talk in the lobby chat (T), which goes on into the match. The owner starts with two people or more, full or not; after the results everyone is back in the waiting room, and the tally counts the lobby’s wins',
+      'In a lobby’s match, Back to lobby leaves the match but not the lobby, and Join match takes you back in when the lobby allows it; a minute without input does the same as Back to lobby. A dropped connection or a reload gets you back within 20 seconds, into your seat if the match is on',
+      'Both arenas’ crew bases have six starts a side (four before): room for 6 v 6, and more places to respawn in Team Deathmatch',
+    ],
+  },
+  {
     version: '0.11.0',
     notes: [
       'Chat in online matches: Enter talks to everyone, T to your team in Team Deathmatch (Tab switches while you type), /w name to whisper, /r to answer, /mute name to mute someone. While you type your car is left alone',

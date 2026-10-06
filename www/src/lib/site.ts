@@ -9,5 +9,5 @@ export const SITE = {
   card: { url: '/og.jpg', width: 1200, height: 630, alt: 'The Scrapyard logo over the yard at sunset' },
   themeColor: '#0c0e13',
   analytics: 'G-HN01PJVCB2', // Google Analytics measurement id
-  repo: 'https://github.com/aasumitro/bbmv', // the source, linked from the home page
+  repo: 'https://github.com/aasumitro/bbmvc', // the source, linked from the home page
 }

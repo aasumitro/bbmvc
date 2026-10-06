@@ -1,14 +1,15 @@
 import { Fragment, memo, useImperativeHandle, useRef, type Ref } from 'react'
 import * as THREE from 'three'
-import { FFA } from '../game/ffa/config'
-import { ITEMS } from '../game/ffa/items'
-import type { Effect, FreeForAll } from '../game/ffa/rules'
+import type { FreeForAll } from '../game/ffa/rules'
+import { SUPPLY } from '../game/items/config'
+import { ITEMS } from '../game/items/items'
+import type { Effect } from '../game/items/supply'
 import type { Match } from '../game/match'
 import { clock } from '../game/mode'
 import { MODES } from '../game/modes'
 import { settings } from '../game/settings'
 import type { Combatant } from '../game/simulation'
-import { TDM, TEAMS } from '../game/tdm/config'
+import { TEAMS } from '../game/tdm/config'
 import { createMinimap, type MapMarks } from './minimap'
 
 // Gameplay HUD. React renders the markup once; the game loop calls update()
@@ -25,11 +26,11 @@ const COMPASS_SPAN = 150 // degrees visible across the compass strip
 const CARDINALS: Record<number, string> = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' }
 const COMPASS_TICKS = Array.from({ length: 144 }, (_, i) => i * 5 - 180) // two turns, so the strip wraps seamlessly
 const GAUGE = 2 * Math.PI * 84 * 0.75 // speedometer arc length: 270° of r = 84
-const MARKERS = 8 // pooled markers over the bots
+const MARKERS = 12 // pooled markers over the bots, for the biggest match (a custom lobby's)
 const BOARD = 4 // free-for-all standings rows: the top four, or the top three and the player's own place
 const FEED = 5 // feed rows
 const FEED_LIFE = 7 // seconds a feed line stays up
-// Effect chips over the health bar: spawn protection, then free for all's timed pickups.
+// Effect chips over the health bar: spawn protection, then the timed pickups.
 const EFFECTS: Array<{ kind: 'shield' | Effect; label: string; color: string }> = [
   { kind: 'shield', label: 'Shield', color: '#f2ece0' },
   { kind: 'repair', label: ITEMS.repair.label, color: ITEMS.repair.color },
@@ -41,8 +42,9 @@ const SEGMENTS = 'repeating-linear-gradient(90deg, transparent 0 calc(20% - 3px)
 
 const caption = 'text-[0.62rem] font-bold tracking-[0.3em] uppercase'
 const label = `${caption} text-white/60`
-const SCORE_ROWS = Math.max(FFA.grid, 2 * TDM.teamSize) // every machine in the biggest match
+const SCORE_ROWS = 12 // every machine in the biggest match (a custom lobby's)
 const scoreCell = 'w-16 py-1.5 text-right'
+const teamKillCell = 'hidden w-12 py-1.5 text-right group-data-[tk=on]/scores:table-cell' // team kills: only with friendly fire on
 const teamScore = 'mt-1 text-[clamp(40px,4.2vw,72px)] font-extrabold tabular-nums'
 const sided = 'data-[side=ally]:text-sky-300 data-[side=hostile]:text-red-400' // team colours, relative to the player
 
@@ -268,7 +270,7 @@ export const Hud = memo(function Hud({ ref }: { ref: Ref<HudHandle> }) {
           team deathmatch heads each team with its kills). It also shows while the player is down,
           headed by who wrecked them and the wait. Centred, but moved left as far as needed to keep clear of the feed
           (its lines reach ~24rem in from the right edge), so a killer's name is never hidden while the player is down. */}
-      <div data-hud="scores" data-mode="ffa" data-dead="off" className="group absolute top-1/2 left-[clamp(calc(min(46vw,390px)_+_1rem),calc(100%_-_min(46vw,390px)_-_24rem),50%)] hidden w-[min(92vw,780px)] -translate-1/2 border border-white/10 bg-[#0b0908]/85 px-7 pt-5 pb-6 shadow-[0_24px_70px_rgba(0,0,0,0.65)] [text-shadow:none] data-[dead=on]:border-red-500/30">
+      <div data-hud="scores" data-mode="ffa" data-dead="off" data-tk="off" className="group group/scores absolute top-1/2 left-[clamp(calc(min(46vw,390px)_+_1rem),calc(100%_-_min(46vw,390px)_-_24rem),50%)] hidden w-[min(92vw,780px)] -translate-1/2 border border-white/10 bg-[#0b0908]/85 px-7 pt-5 pb-6 shadow-[0_24px_70px_rgba(0,0,0,0.65)] [text-shadow:none] data-[dead=on]:border-red-500/30">
         <div className="flex items-end justify-between gap-6 border-b border-white/10 pb-3">
           <div>
             <p className="mb-1 hidden text-xs font-bold tracking-[0.3em] text-red-400/90 uppercase group-data-[dead=on]:block">Your machine is scrap</p>
@@ -291,6 +293,7 @@ export const Hud = memo(function Hud({ ref }: { ref: Ref<HudHandle> }) {
               <th className={`${scoreCell} font-bold`}>Streak</th>
               <th className={`${scoreCell} font-bold`}>Damage</th>
               <th className={`${scoreCell} font-bold`}>Score</th>
+              <th className={`${teamKillCell} font-bold`}>TK</th>
             </tr>
           </thead>
           <tbody>
@@ -298,7 +301,7 @@ export const Hud = memo(function Hud({ ref }: { ref: Ref<HudHandle> }) {
               <Fragment key={i}>
                 {/* team deathmatch: a team's header over its first row */}
                 <tr data-hud="scoresTeam" data-side="ally" className="group hidden border-t border-white/10 first:border-t-0">
-                  <td colSpan={8} className="pt-3 pb-1 pl-1 text-[0.62rem] tracking-[0.25em]">
+                  <td colSpan={9} className="pt-3 pb-1 pl-1 text-[0.62rem] tracking-[0.25em]">
                     <span data-hud="scoresTeamName" className="text-sky-300 group-data-[side=hostile]:text-red-400" />
                     <span data-hud="scoresTeamKills" className="ml-3 text-neutral-400" />
                   </td>
@@ -328,6 +331,7 @@ export const Hud = memo(function Hud({ ref }: { ref: Ref<HudHandle> }) {
                   <td data-hud="scoresStreak" className={scoreCell} />
                   <td data-hud="scoresDamage" className={scoreCell} />
                   <td data-hud="scoresScore" className={scoreCell} />
+                  <td data-hud="scoresTK" className={teamKillCell} />
                 </tr>
               </Fragment>
             ))}
@@ -426,6 +430,7 @@ function collect(root: HTMLDivElement) {
     scoresStreak: all('scoresStreak'),
     scoresDamage: all('scoresDamage'),
     scoresScore: all('scoresScore'),
+    scoresTK: all('scoresTK'),
   }
 }
 
@@ -436,7 +441,7 @@ function createView(getRoot: () => HTMLDivElement | null): HudHandle {
   let sampleAt = 0 // frame-rate sampling window start
   let lastKmh = -1
   const screen = new THREE.Vector3()
-  const marks: MapMarks = { zone: null, items: [], range: FFA.items.senseRange, leader: null }
+  const marks: MapMarks = { zone: null, items: [], range: SUPPLY.senseRange, leader: null }
   const ranked: Combatant[] = [] // scoreboard order, refilled while it's open
   let scoresOpen = false
 
@@ -465,12 +470,10 @@ function createView(getRoot: () => HTMLDivElement | null): HudHandle {
       const car = match.cars[player.id].model
       const q = car.quaternion
       drawMinimap ??= createMinimap(el.minimap, match.arena)
-      if (ffa) {
-        marks.zone = ffa.zone
-        marks.items = ffa.items
-        marks.leader = leader > 0 && match.combatants[leader].alive ? match.combatants[leader].position : null
-      }
-      drawMinimap(car.position, yaw, Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y)), others, player.team, ffa ? marks : undefined, match.online ? match.people : undefined)
+      marks.zone = ffa?.zone ?? null
+      marks.items = mode.supply?.items ?? []
+      marks.leader = leader > 0 && match.combatants[leader].alive ? match.combatants[leader].position : null
+      drawMinimap(car.position, yaw, Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y)), others, player.team, ffa || mode.supply ? marks : undefined, match.online ? match.people : undefined)
 
       setStyle(el.solo, 'display', tdm ? 'none' : 'block')
       setStyle(el.teams, 'display', tdm ? 'grid' : 'none')
@@ -555,14 +558,14 @@ function createView(getRoot: () => HTMLDivElement | null): HudHandle {
       setStyle(el.healthTrail, 'width', percent)
       el.healthBar.dataset.low = health <= 30 ? 'on' : 'off'
 
-      // free for all: what was just picked up; each effect's time left
+      // pickups: what was just picked up; each effect's time left
       setText(el.pickup, feedback.pickup)
       if (el.pickup.style.color !== feedback.pickupColor) el.pickup.style.color = feedback.pickupColor
       fade(el.pickup, Math.min(1, feedback.pickupTime))
       const mine = rules.contenders[player.id]
       for (let k = 0; k < EFFECTS.length; k++) {
         const { kind } = EFFECTS[k]
-        const until = kind === 'shield' ? (mine.life === 'protected' ? mine.protectedUntil : 0) : ffa ? ffa.contenders[player.id].effects[kind] : 0
+        const until = kind === 'shield' ? (mine.life === 'protected' ? mine.protectedUntil : 0) : (mode.supply?.effects[player.id][kind] ?? 0)
         const remaining = until - rules.now
         setStyle(el.effects[k], 'display', remaining > 0 ? 'inline-flex' : 'none')
         if (remaining > 0) setText(el.effectLeft[k], `${remaining.toFixed(1)}s`)
@@ -682,6 +685,7 @@ function drawScores(el: ReturnType<typeof collect>, match: Match, ranked: Combat
     ranked.sort((a, b) => +(a.team !== player.team) - +(b.team !== player.team)) // stable: each team keeps its order
   }
   el.scores.dataset.mode = mode.kind
+  el.scores.dataset.tk = tdm?.settings.friendlyFire ? 'on' : 'off' // information, never a score
   setText(el.scoresMode, dead ? (tdm ? 'Wrecked' : 'Destroyed') : MODES[mode.kind].label)
   if (dead) {
     const left = match.respawnIn()
@@ -719,5 +723,6 @@ function drawScores(el: ReturnType<typeof collect>, match: Match, ranked: Combat
     setText(el.scoresStreak[k], String(c.stats.streak))
     setText(el.scoresDamage[k], Math.round(c.stats.damageDealt).toLocaleString('en-US'))
     setText(el.scoresScore[k], Math.round(c.stats.combatScore).toLocaleString('en-US'))
+    setText(el.scoresTK[k], String(c.stats.teamKills))
   }
 }

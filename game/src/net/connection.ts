@@ -92,11 +92,16 @@ export function join(socket: WebSocket, hello: Hello & { mode: string; map: stri
 
 // A match over a socket the server has just seated (its welcome): everything
 // the server says from now on waits in `take()` until the match takes it; a
-// ping now and then for the round trip; goodbye on the way out.
-export function link(socket: WebSocket, welcome: Welcome) {
+// ping now and then for the round trip; goodbye on the way out. A custom
+// lobby's match shares its socket with the lobby: the lobby's own word
+// (`lb`, `lbs`) goes to `aside` as it comes, and once the match is over for
+// the player the lobby takes the socket back (`release`), which the match's
+// own close then leaves open.
+export function link(socket: WebSocket, welcome: Welcome, aside?: (message: ServerMessage) => void) {
   const inbox: Array<{ message: ServerMessage; at: number }> = [] // each with when it arrived (performance.now())
   const status = { rtt: 0, closed: '', sent: 0 } // closed: why the link ended ('' while open)
   let pong: ((k: number, at: number) => void) | null = null
+  let released = false
   const ping = setInterval(() => socket.readyState === socket.OPEN && socket.send(JSON.stringify({ t: 'ping', c: performance.now() })), PING)
 
   socket.onmessage = (e) => {
@@ -105,6 +110,7 @@ export function link(socket: WebSocket, welcome: Welcome) {
       status.rtt = performance.now() - message.c
       return pong?.(message.k, performance.now())
     }
+    if (aside && (message.t === 'lb' || message.t === 'lbs')) return aside(message)
     if (message.t === 'err') status.closed = reasonFor(message.code, message.text)
     inbox.push({ message, at: performance.now() })
   }
@@ -126,9 +132,18 @@ export function link(socket: WebSocket, welcome: Welcome) {
     },
     close() {
       clearInterval(ping)
-      if (socket.readyState === socket.OPEN) socket.send('{"t":"bye"}')
       status.closed ||= 'left'
+      if (released) return // the lobby's socket now
+      if (socket.readyState === socket.OPEN) socket.send('{"t":"bye"}')
       socket.close()
+    },
+    // The match is over for the player: stop reading for it and hand the socket back, open.
+    // The match hears nothing more (not a lost connection: the screen goes back to the lobby).
+    release() {
+      clearInterval(ping)
+      released = true
+      socket.onmessage = socket.onclose = null
+      return socket
     },
   }
 }

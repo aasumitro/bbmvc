@@ -207,6 +207,7 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
       else if (position.distanceToSquared(camera.position) < 150 * 150) effects[kind === 'fire' ? 'burn' : 'steam'](position, dt)
     }
     for (const c of combatants) {
+      if (!c.present) continue // an empty seat: nothing there
       const { model } = cars[c.id]
       if (!c.alive) {
         effects.burn(spot.set(0, 1.1, 1.3).applyQuaternion(model.quaternion).add(model.position), dt)
@@ -236,7 +237,7 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
     const grounded = player.car.controller.wheelIsInContact(2) || player.car.controller.wheelIsInContact(3)
     const braking = player.control.throttle * player.speed < 0 && Math.abs(player.speed) > 6 ? 0.35 : 0
     tyres.set(player.alive && grounded ? THREE.MathUtils.clamp((slip(player) - 1.5) / 5 + braking, 0, 1) : 0)
-    burning.forEach((loop, c) => loop.set(1, undefined, cars[c.id].model.position))
+    burning.forEach((loop, c) => loop.set(c.present ? 1 : 0, undefined, cars[c.id].model.position))
   }
 
   return {
@@ -244,10 +245,11 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
     cars, // by combatant id
     feedback,
     events,
-    // Every model between the last two steps (`alpha` of the way there), wheels on their suspension.
+    // Every model between the last two steps (`alpha` of the way there), wheels on their suspension; an empty seat's hidden.
     place(alpha: number) {
       for (const c of combatants) {
         const { model, wheels } = cars[c.id]
+        model.visible = c.present
         model.position.lerpVectors(c.last.position, c.position, alpha)
         model.quaternion.slerpQuaternions(c.last.rotation, c.rotation, alpha)
         poseWheels(c.car, wheels)

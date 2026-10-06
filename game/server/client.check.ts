@@ -4,7 +4,9 @@
 // from the welcome, the machines, rules, statistics and seats mirrored from
 // what the server sends, its events played into a presenter with the local
 // machines, one input a step, sight lines cast at what is shown, the next
-// match, a hidden tab catching up, a dropped connection. Bundled:
+// match, a hidden tab catching up, a dropped connection; and a custom
+// lobby's store (net/custom.ts) from the list into a lobby, its match and
+// back, on one socket, then back in after a drop or a reload. Bundled:
 // npm run server:check.
 import RAPIER from '@dimforge/rapier3d-compat'
 import { arenaDigest } from '../src/game/arena/digest'
@@ -12,7 +14,9 @@ import { WEAPONS } from '../src/game/combat'
 import { initPhysics } from '../src/game/physics'
 import type { Combatant } from '../src/game/simulation'
 import { placeCar } from '../src/game/vehicle/drive'
+import { classic } from '../src/game/matchSettings'
 import { link, openSocket, sayHello } from '../src/net/connection'
+import { ask, closeCustom, currentCustom, leaveMatch, onCustom, openCustom, openInvite, resumeLobby, type Custom, type Dial } from '../src/net/custom'
 import { readServer, type ServerMessage } from '../src/net/protocol'
 import { arenaData } from './arenas'
 import { mintToken } from './auth'
@@ -241,6 +245,122 @@ check(x.client.net.lost !== '' && y.client.net.lost !== '', `a closed server is 
   pa.link.close()
   pb.link.close()
   await queue.close()
+}
+
+// --- a custom lobby: the page's store, from the list into the lobby, its match and back ----------------------------
+
+// The store as the Custom entry runs it, on a socket the check dials (one
+// per open: a drop or a reload dials again); the others are sockets of
+// their own. The lobby keeps a dropped member 0.4 s here.
+{
+  const party = createGameServer({ port: 0, key: KEY, origins: [ORIGIN], maxRooms: 2, results: 1, matchmaking: { loadTimeoutMs: 300 }, lobbies: { grace: 400, listEvery: 50 }, log: () => {} })
+  const at = await party.listen()
+  const url = `ws://127.0.0.1:${at}/match`
+  const token = (uid: string) => mintToken({ uid, usn: uid, exp: Date.now() / 1000 + 3600 }, KEY)
+  const loadout = { vehicle: 'razor', weapon: 'minigun' } as const
+  const sockets: WebSocket[] = [] // the store's, each dial
+  let late = 0 // ms the next dial takes: past the grace, to come back too late
+  const dial: Dial = async () => {
+    if (late) await play(late)
+    const open = await openSocket(url, ORIGIN)
+    sockets.push(open)
+    return { open, token: token('c-page'), guest: true }
+  }
+  const store = () => currentCustom()
+  type Seated = Extract<Custom, { phase: 'seated' }>
+  const view = () => {
+    const now = store()
+    return now.phase === 'lobby' || now.phase === 'seated' ? now.lobby : null
+  }
+  async function member(uid: string) {
+    const socket = await openSocket(url, ORIGIN)
+    const heard: ServerMessage[] = []
+    socket.onmessage = (e) => heard.push(readServer(e.data))
+    sayHello(socket, { token: token(uid), guest: true, loadout })
+    const lobby = () => heard.findLast((m) => m.t === 'lb')
+    return { socket, heard, lobby: () => { const m = lobby(); return m?.t === 'lb' ? m.lobby : null }, send: (message: object) => socket.send(JSON.stringify(message)) }
+  }
+  const roomOf = (id: string) => party.lobby.rooms.find((r) => r.lobby === id)!
+  const phases: string[] = [] // every phase the store has been in (coming back can be quicker than a look)
+  onCustom(() => phases.push(store().phase))
+
+  void openCustom(loadout, dial)
+  await until(() => store().phase === 'browsing' && (store() as { list: unknown }).list !== null, 2000, 'the list')
+  check((await ask({ t: 'lb', do: 'code', code: 'ZZZZZZZZ' })) === 'No lobby has that code', 'the store: a refusal comes back in the player’s words')
+  const settings = { ...classic('tdm'), size: 4, duration: 300 }
+  check((await ask({ t: 'lb', do: 'create', name: 'Store lobby', open: true, password: '', mode: 'tdm', map: 'scrapyard', settings, jip: true })) === '' && store().phase === 'lobby', 'a lobby made: the store is in its waiting room once the server says so')
+  const made = view()!
+  const m1 = await member('c-m1')
+  m1.send({ t: 'lb', do: 'code', code: made.code })
+  await until(() => view()?.slots[2]?.kind === 'person', 1000, 'a member by code')
+  const owner = view()!.slots[0]
+  check(view()!.people === 2 && owner.kind === 'person' && owner.owner, 'a second person by code lands on the side with fewer; the store sees them')
+  m1.send({ t: 'lb', do: 'ready', on: true })
+  await until(() => view()!.slots.some((slot) => slot.kind === 'person' && slot.ready), 1000, 'the member ready')
+
+  check((await ask({ t: 'lb', do: 'start' })) === '' && store().phase === 'seated', 'start: the welcome comes on the store’s socket and becomes the match’s link')
+  const first = store() as Seated
+  await until(() => !!view()?.playing, 1000, 'the lobby’s word beside the match')
+  check(first.link.welcome.lobby === made.id && sockets.length === 1, 'the lobby’s word is passed aside while the match has the socket')
+  leaveMatch()
+  await until(() => store().phase === 'lobby', 1000, 'back to the waiting room')
+  first.link.close() // the match screen's own close, after the store took the socket back
+  await play(100)
+  check(view()!.phase === 'playing' && !view()!.playing && sockets[0].readyState === WebSocket.OPEN, 'Back to lobby: the match runs on without the player; the link let go of the socket, open')
+  void ask({ t: 'lb', do: 'play' })
+  await until(() => store().phase === 'seated', 1000, 'into the match again')
+  const room = roomOf(made.id)
+  await until(() => room.hold < 0, 2000, 'the load timeout')
+  ;(room.mode.rules as { score: number[] }).score[0] = 1 // blue wins at the buzzer
+  Object.assign(room.mode.rules, { now: 3 + settings.duration - 0.05 })
+  await until(() => store().phase === 'lobby' && view()!.phase === 'waiting', 4000, 'the match over')
+  check(view()!.tally['0'] === 1 && sockets.length === 1, 'the match over after its results: the store back in the waiting room on the same socket, the tally counting')
+
+  // a drop, then a reload: back in within the grace
+  phases.length = 0
+  sockets.at(-1)!.close()
+  await until(() => phases.includes('back') && store().phase === 'lobby', 2000, 'back in after the drop')
+  check(view()!.id === made.id && view()!.you === 0 && sockets.length === 2 && !view()!.slots.some((slot) => slot.kind === 'person' && slot.away), 'a drop in the waiting room: a new socket, back in the same slot')
+  await until(() => view()!.slots[2].kind === 'person' && !(view()!.slots[2] as { away: boolean }).away, 1000, 'the member here')
+  m1.send({ t: 'lb', do: 'ready', on: true })
+  await until(() => view()!.slots.some((slot) => slot.kind === 'person' && slot.ready), 1000, 'ready again')
+  await ask({ t: 'lb', do: 'start' })
+  const seat = (store() as Seated).link.welcome.seat
+  phases.length = 0
+  sockets.at(-1)!.close()
+  await until(() => phases.includes('back') && store().phase === 'seated', 2000, 'back in the match after the drop')
+  const again = store() as Seated
+  check(again.link.welcome.seat === seat && roomOf(made.id).humans.some((h) => h.uid === 'c-page'), 'a drop in a match: back in, a fresh welcome for the seat it held')
+  leaveMatch()
+  await until(() => store().phase === 'lobby', 1000, 'back to the waiting room')
+  const tab = await member('c-page') // another tab of the same player takes the session over: this one is out, as a reload leaves it
+  await until(() => store().phase === 'off', 1000, 'the session taken over')
+  tab.socket.close()
+  sessionStorage.setItem('scrapyard.lobby', made.id) // what the reloaded tab remembers (the store forgot it with its session)
+  check(resumeLobby(loadout) && store().phase === 'back', 'a reload in a lobby: the tab remembers it and goes back')
+  await until(() => store().phase === 'lobby', 2000, 'back in after the reload')
+  check(view()!.id === made.id && view()!.you === 0, 'back in the lobby after the reload, in the same slot')
+  late = 700
+  sockets.at(-1)!.close()
+  await until(() => store().phase === 'browsing', 3000, 'too late')
+  late = 0
+  check((store() as { note: string }).note === 'Back too late — the lobby went on without you' && m1.lobby()?.slots[2]?.kind === 'person' && (m1.lobby()!.slots[2] as { owner: boolean }).owner, 'back after the grace: the list, and why; the lobby went on, its member the owner now')
+
+  // kicked mid-match: the list, and why (never a seatless match)
+  closeCustom()
+  await until(() => store().phase === 'off', 1000, 'the entry left')
+  openInvite(loadout, made.code, dial)
+  await until(() => store().phase === 'seated', 2000, 'the invite')
+  check((store() as Seated).link.welcome.lobby === made.id, 'an invite link: the entry opens and joins its lobby, straight into the match it plays (join in progress)')
+  m1.send({ t: 'lb', do: 'kick', uid: 'c-page' })
+  await until(() => store().phase === 'browsing' && (store() as { asked: string }).asked === '', 2000, 'the kick')
+  check((store() as { note: string }).note === 'The owner kicked you from the lobby', 'kicked in a match: the store is back on the list, saying why')
+  closeCustom()
+  await until(() => store().phase === 'off', 1000, 'the entry left')
+  await play(100)
+  check(sockets.at(-1)!.readyState === WebSocket.CLOSED, 'leaving the Custom entry closes its socket')
+  m1.socket.close()
+  await party.close()
 }
 
 console.log(`client ok (${checks} checks)`)

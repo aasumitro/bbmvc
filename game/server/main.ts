@@ -11,7 +11,8 @@ import { createGameServer } from './server'
 //   NAKAMA_ENCRYPTION_KEY  Nakama's session.encryption_key (local default: Nakama's own default;
 //                          with TRUST_PROXY it must be set, and not to that default, or the server won't start)
 //   ALLOWED_ORIGINS        pages that may connect, comma-separated (default: localhost and 127.0.0.1, any port)
-//   MAX_ROOMS              rooms at once (default 12)
+//   MAX_ROOMS              rooms at once, Classic's and custom lobbies' matches alike (default 12)
+//   MAX_LOBBIES            custom lobbies at once (default 24); a lobby holds a room only while its match is played
 //   TRUST_PROXY            1 behind a proxy that is the only way in (Caddy): addresses from X-Forwarded-For;
 //                          production, so pages from Vite's dev server (build 'dev') are refused too
 //   NET_LAG_MS             development only: ms added each way to every message
@@ -38,7 +39,7 @@ const trustProxy = env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true'
 const key = env.NAKAMA_ENCRYPTION_KEY || 'defaultencryptionkey'
 // Behind the proxy is production: there, Nakama's default key (or none) would let anyone sign a session.
 if (trustProxy && key === 'defaultencryptionkey') refuse('NAKAMA_ENCRYPTION_KEY is unset or Nakama’s default, and TRUST_PROXY says this is production')
-const settings = { port: whole('PORT', 7360, 0), maxRooms: whole('MAX_ROOMS', 12, 1), lag: whole('NET_LAG_MS', 0, 0), jitter: whole('NET_JITTER_MS', 0, 0) }
+const settings = { port: whole('PORT', 7360, 0), maxRooms: whole('MAX_ROOMS', 12, 1), maxLobbies: whole('MAX_LOBBIES', 24, 1), lag: whole('NET_LAG_MS', 0, 0), jitter: whole('NET_JITTER_MS', 0, 0) }
 
 await initPhysics()
 for (const id of Object.keys(MAPS) as MapId[]) arenaData(id)
@@ -48,6 +49,7 @@ const server = createGameServer({
   key,
   origins: list(env.ALLOWED_ORIGINS, ['http://localhost:*', 'http://127.0.0.1:*', 'https://localhost:*', 'https://127.0.0.1:*']),
   maxRooms: settings.maxRooms,
+  lobbies: { max: settings.maxLobbies },
   trustProxy,
   strict: trustProxy,
   lag: settings.lag,

@@ -9,7 +9,9 @@ import { useClock } from '../screens/search'
 // typing), Enter sends, Esc lets it go. While the line is open the keys are
 // the chat's — the game hears none of them, so typing never drives — and the
 // mouse is free; sending gives the game the mouse back (Esc or a click on the
-// arena does too, the click as it always does).
+// arena does too, the click as it always does). Docked in a custom lobby's
+// waiting room instead: its lines stay, and T opens the line (Enter is Ready
+// there).
 
 const FRESH = 10_000 // ms a line stays up while the chat line is closed
 const SHOWN = { closed: 6, open: 12 } // lines at most
@@ -24,17 +26,18 @@ const TONES: Record<ChatKind, string> = {
 
 interface ChatBoxProps {
   chat: Chat
-  onTyping: (typing: boolean, sent?: boolean) => void
+  onTyping?: (typing: boolean, sent?: boolean) => void
+  docked?: boolean // in the page's flow (the waiting room), not over the arena
 }
 
 // Up while the match is being played (GameCanvas takes it away under a menu or the results).
-export function ChatBox({ chat, onTyping }: ChatBoxProps) {
+export function ChatBox({ chat, onTyping = () => {}, docked = false }: ChatBoxProps) {
   useSyncExternalStore(chat.subscribe, chat.version)
   const [to, setTo] = useState<'all' | 'team' | null>(null) // the open line, and whom it goes to
   const [text, setText] = useState('')
   const field = useRef<HTMLInputElement>(null)
-  const now = useClock(true, 500)
-  const shown = to ? chat.lines.slice(-SHOWN.open) : chat.lines.filter((line) => now - line.at < FRESH).slice(-SHOWN.closed)
+  const now = useClock(!docked, 500)
+  const shown = to || docked ? chat.lines.slice(-SHOWN.open) : chat.lines.filter((line) => now - line.at < FRESH).slice(-SHOWN.closed)
 
   function open(kind: 'all' | 'team') {
     setTo(kind)
@@ -49,8 +52,12 @@ export function ChatBox({ chat, onTyping }: ChatBoxProps) {
   useEffect(() => {
     if (to) return
     function onKeyDown(e: KeyboardEvent) {
-      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return
-      if (e.key === 'Enter') {
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.target instanceof HTMLInputElement) return
+      if (docked) {
+        if (e.code !== 'KeyT') return
+        e.preventDefault()
+        open('all')
+      } else if (e.key === 'Enter') {
         e.preventDefault()
         open('all')
       } else if (e.code === 'KeyT' && chat.team) {
@@ -66,8 +73,10 @@ export function ChatBox({ chat, onTyping }: ChatBoxProps) {
   }, [to])
 
   return (
-    <div className="pointer-events-none fixed bottom-[calc(2.6vh+clamp(150px,13vw,240px)+2vh)] left-[2vw] z-[5] w-[min(36vw,460px)] text-[0.78rem] leading-snug font-semibold [text-shadow:0_1px_3px_rgba(0,0,0,0.9)]">
-      <ol aria-live="polite" aria-label="Match chat" className={`flex flex-col gap-0.5 ${to ? 'rounded bg-black/45 p-2 backdrop-blur-xs' : ''}`}>
+    <div
+      className={`text-[0.78rem] leading-snug font-semibold [text-shadow:0_1px_3px_rgba(0,0,0,0.9)] ${docked ? 'flex h-full flex-col' : 'pointer-events-none fixed bottom-[calc(2.6vh+clamp(150px,13vw,240px)+2vh)] left-[2vw] z-[5] w-[min(36vw,460px)]'}`}
+    >
+      <ol aria-live="polite" aria-label={docked ? 'Lobby chat' : 'Match chat'} className={`flex flex-col gap-0.5 ${to ? 'rounded bg-black/45 p-2 backdrop-blur-xs' : ''} ${docked ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}>
         {shown.map((line) => (
           <li key={line.id} className={`break-words ${TONES[line.kind]}`}>
             {TAGS[line.kind]}
@@ -76,6 +85,12 @@ export function ChatBox({ chat, onTyping }: ChatBoxProps) {
           </li>
         ))}
       </ol>
+      {docked && !to && (
+        <button onClick={() => open('all')} className="mt-1.5 flex w-full items-center gap-2 rounded border border-white/15 bg-black/40 px-2 py-1.5 text-left text-neutral-500 hover:border-white/30">
+          <span className="rounded border border-neutral-500/50 px-1.5 text-[0.62rem] text-neutral-400">T</span>
+          Say something to the lobby
+        </button>
+      )}
       {to && (
         <label className="pointer-events-auto mt-1.5 flex items-center gap-2 rounded border border-white/20 bg-black/70 px-2 py-1.5 backdrop-blur-xs">
           <span className={`text-[0.62rem] font-bold tracking-[0.2em] uppercase ${to === 'team' ? 'text-sky-300' : 'text-red-400'}`}>{to === 'team' ? 'Team' : 'All'}</span>

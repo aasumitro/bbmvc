@@ -13,9 +13,11 @@ import { NetError, type Link } from '../net/connection'
 import { settings, updateSettings } from '../game/settings'
 import { ChatBox } from '../hud/Chat'
 import { Hud, type HudHandle } from '../hud/Hud'
+import { Confirm } from './Confirm'
 import { Drawer } from './Drawer'
 import { ActionButton, Menu } from './Menu'
 import { Results } from './Results'
+import { useCustom } from './search'
 import { RestoreDefaults, SettingsPanel } from './SettingsPanel'
 
 interface GameCanvasProps {
@@ -33,10 +35,14 @@ interface GameCanvasProps {
 // The runtime's loop drives the simulation, camera, HUD and rendering every
 // frame. Online, Esc opens a menu over a match that runs on, the results
 // count down to the next match, and a lost connection says so; a failed
-// start can't be retried (the seat is gone with it), only left.
+// start can't be retried (the seat is gone with it), only left. A custom
+// lobby's match leaves for the lobby's waiting room instead (App moves there
+// on the server's word).
 export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: GameCanvasProps) {
   const online = link !== null
   const people = link?.welcome.lineUp.filter((seat) => seat.human).length ?? 0
+  const custom = useCustom()
+  const lobby = link?.welcome.lobby && custom.phase === 'seated' ? custom.lobby : null // a custom lobby's match: its lobby as it stands
   const containerRef = useRef<HTMLDivElement>(null)
   const hudRef = useRef<HudHandle>(null)
   const [match, setMatch] = useState<Match | null>(null)
@@ -201,7 +207,7 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
               <p className="text-xs tracking-[0.3em] text-red-400 uppercase">{progress.label} failed</p>
               <p className="mt-2 font-display text-sm text-neutral-300 italic">{failed || "The match couldn't start. The details are in the browser console."}</p>
               {!online && <ActionButton primary title="Retry" line="Try starting again" onClick={retry} className="mt-6 w-full" />}
-              <ActionButton primary={online} title="Back to garage" line="Leave this match" onClick={onExit} className={online ? 'mt-6 w-full' : 'mt-3 w-full'} />
+              <ActionButton primary={online} title={link?.welcome.lobby ? 'Back to lobby' : 'Back to garage'} line="Leave this match" onClick={onExit} className={online ? 'mt-6 w-full' : 'mt-3 w-full'} />
             </div>
           ) : (
             <p className="text-xs tracking-[0.3em] text-neutral-400 uppercase">{progress.label}</p>
@@ -219,7 +225,7 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
             options={[
               { label: 'Back to the match', action: resume },
               { label: 'Settings', action: () => setDrawer('settings') },
-              { label: 'Leave match', action: () => setLeaving(true) },
+              { label: link?.welcome.lobby ? 'Back to lobby' : 'Leave match', action: () => setLeaving(true) },
             ]}
           />
         ) : (
@@ -240,70 +246,18 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
           <SettingsPanel />
         </Drawer>
       )}
-      {(phase === 'victory' || phase === 'defeat') && match && <Results match={match} onPlayAgain={restart} onExit={onExit} />}
+      {(phase === 'victory' || phase === 'defeat') && match && <Results match={match} lobby={lobby} onPlayAgain={restart} onExit={onExit} />}
       {phase === 'lost' && match && <Lost reason={match.lost} onExit={onExit} />}
       {/* leaving a match still in progress asks first; after the result it's a plain exit */}
       {leaving &&
-        (online ? (
+        (link?.welcome.lobby ? (
+          <Confirm title="Back to the lobby?" body="Your machine leaves the match; you stay in the lobby." confirm="Back to lobby" onConfirm={onExit} onCancel={() => setLeaving(false)} />
+        ) : online ? (
           <Confirm title="Leave the match?" body="A bot takes your machine over." confirm="Leave match" onConfirm={onExit} onCancel={() => setLeaving(false)} />
         ) : (
           <Confirm title="Leave the match?" body="Your progress in this match will be lost." confirm="Exit to garage" onConfirm={onExit} onCancel={() => setLeaving(false)} />
         ))}
     </>
-  )
-}
-
-interface ConfirmProps {
-  title: string
-  body: string
-  confirm: string // the action being confirmed, e.g. Exit to garage
-  onConfirm: () => void
-  onCancel: () => void
-}
-
-// A yes/no over everything else. The safe answer comes first and starts
-// selected, so a second Enter from the menu underneath can't slip through;
-// Esc or a click outside the box is the same as Stay.
-function Confirm({ title, body, confirm, onConfirm, onCancel }: ConfirmProps) {
-  const [selected, setSelected] = useState(0) // 0: stay, 1: confirm
-  const choose = (i: number) => {
-    playSound('ui')
-    if (i) onConfirm()
-    else onCancel()
-  }
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.repeat) return
-      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyA', 'KeyD', 'KeyW', 'KeyS'].includes(e.code)) setSelected((i) => 1 - i)
-      if (e.key === 'Enter' || e.code === 'Space') {
-        e.preventDefault() // no second press through a focused button
-        choose(selected)
-      }
-      if (e.code === 'Escape') choose(0)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  })
-
-  return (
-    <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" onClick={onCancel} className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 text-[#f2ece0]">
-      <div onClick={(e) => e.stopPropagation()} className="w-[min(90vw,460px)] border border-white/10 bg-[#12161f] px-9 py-8 shadow-[0_24px_70px_rgba(0,0,0,0.65)]">
-        <h2 id="confirm-title" className="m-0 font-display text-4xl font-semibold">
-          {title}
-        </h2>
-        <p className="mt-3 font-display text-base text-neutral-300 italic">{body}</p>
-        <Menu row items={[{ label: 'Stay' }, { label: confirm, danger: true }]} selected={selected} onSelect={setSelected} onActivate={choose} className="mt-8" />
-        <div className="mt-8 flex items-center gap-4 text-xs tracking-[0.1em] text-neutral-400 uppercase">
-          <span className={keycap}>&larr;&rarr;</span>
-          <span>Choose</span>
-          <span className={keycap}>Enter</span>
-          <span>Select</span>
-          <span className={keycap}>Esc</span>
-          <span>Stay</span>
-        </div>
-      </div>
-    </div>
   )
 }
 

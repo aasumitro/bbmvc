@@ -8,6 +8,7 @@ import { WEAPONS } from './combat'
 import { createFeed } from './feed'
 import type { Loadout } from './loadout'
 import type { MapId } from './maps'
+import { classic } from './matchSettings'
 import { MODES, type Mode } from './modes'
 import { createWorld, PHYSICS_STEP } from './physics'
 import { createPilot } from './pilot'
@@ -88,11 +89,12 @@ export function createMatch({ scene, camera, arena, map, mode: kind, difficulty,
   let seed = freshSeed()
   const world = createWorld(arena.colliders)
   const skill = DIFFICULTIES[difficulty] // the bots': their skill, and how it scales their guns
+  const settings = classic(kind) // practice plays as Classic does
   // Practice line-up (roster.ts): the player in seat 0 with the garage loadout, bots in the rest.
-  const combatants = recruits(kind, arena, seed, skill, { name: 'You', vehicle: loadout.vehicle, weapon: WEAPONS[loadout.weapon] }).map((recruit, id) => enlist(world, id, recruit))
+  const combatants = recruits(kind, arena, settings, seed, skill, { name: 'You', vehicle: loadout.vehicle, weapon: WEAPONS[loadout.weapon] }).map((recruit, id) => enlist(world, id, recruit))
   const player = combatants[0]
   const view = createMatchView({ scene, camera, surface, world, arena, combatants, player })
-  const mode = MODES[kind].create({ combatants, arena, world, seed, scene })
+  const mode = MODES[kind].create({ combatants, arena, world, seed, settings, scene })
   const { rules } = mode
   const sim = createSimulation({ world, arena, combatants, mode, events: view.events, seed })
   const feed = createFeed(combatants, player.id, () => rules.now, view.feedback)

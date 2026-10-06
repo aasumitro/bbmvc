@@ -106,6 +106,7 @@ function copy(from: CarState, out: CarState) {
   out.speed = from.speed
   out.health = from.health
   out.alive = from.alive
+  out.present = from.present
   out.handbrake = from.handbrake
   out.fire = from.fire
   out.throttle = from.throttle

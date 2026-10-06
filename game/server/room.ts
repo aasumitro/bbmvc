@@ -6,9 +6,10 @@ import { armWeapon, WEAPONS, type WeaponId } from '../src/game/combat'
 import type { Loadout } from '../src/game/loadout'
 import type { Arena } from '../src/game/arena/arena'
 import type { MapId } from '../src/game/maps'
+import { classic, type MatchSettings } from '../src/game/matchSettings'
 import { MODES, type Mode } from '../src/game/modes'
 import { createWorld, PHYSICS_STEP } from '../src/game/physics'
-import { botName, recruits } from '../src/game/roster'
+import { botName, recruits, type SeatPlan } from '../src/game/roster'
 import { createSimulation, enlist, type Combatant } from '../src/game/simulation'
 import { arenaDigest } from '../src/game/arena/digest'
 import { carRow, clampAim, clampView, meRow, packCars, packEvents, packSnapshot, PROTOCOL, RATE, STAT_KEYS, statsRow, weaponId, acceptSeq, type ErrorCode, type Input, type ServerMessage } from '../src/net/protocol'
@@ -33,6 +34,11 @@ import { createRewind } from './rewind'
 // match that ends is written down (`record`), and everything a replay needs
 // to run the room again goes out line by line (`journal`: seats taken and
 // left, each person's input as the room used it, the next match's seed).
+// A custom lobby's room (`lobby`) is made from the lobby's seat plan: bots
+// only where the owner put them, each person in their own slot's seat, the
+// other seats empty; a person who leaves leaves an empty seat, never a bot;
+// Classic never sees it; and after its results the lobby hears the match is
+// over (`over`) instead of a next match starting.
 
 export const SKILL = DIFFICULTIES.normal // the bots' online
 const QUEUE = 6 // inputs kept per player; past this the oldest go (latency capped)
@@ -46,7 +52,8 @@ const QUEUE = 6 // inputs kept per player; past this the oldest go (latency capp
 // ran down to one or none in the window is absorbing jitter, and is left alone.
 const DRAIN = 30
 const STALE = 250 // ms without input: the machine coasts, trigger off
-const IDLE = 60_000 // ms without input: the player is let go and a bot takes the seat
+const ABANDON = 10_000 // ms a custom room's match runs with no person seated before it ends without a result
+const IDLE = 60_000 // ms without input: the player is let go and a bot takes the seat (a custom room: back to the lobby's waiting room)
 const SHARE = 12 // steps between checks for a changed rules state
 const NEUTRAL = { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false }
 const STAND_DOWN = { ...NEUTRAL, handbrake: true }
@@ -56,7 +63,7 @@ const CAMERA = { back: 8.5, up: 1.7 } // and the camera itself, behind the pivot
 const freshSeed = () => randomBytes(4).readUInt32LE(0)
 // A chat channel's name (Nakama room channels: net/chat.ts, nakama/data/modules/chat.lua):
 // unguessable, since a room channel lets in whoever knows its name.
-const channel = () => `sy-${randomBytes(12).toString('hex')}`
+export const channel = () => `sy-${randomBytes(12).toString('hex')}`
 
 // A person in a seat.
 export interface Human {
@@ -105,6 +112,7 @@ export interface MatchRecord {
   seconds: number
   winner: number | null // the winning team (free for all: the winner's own), null a draw
   seats: SeatRecord[]
+  custom?: { lobby: string; settings: MatchSettings } // a custom lobby's match: kept for fair-play review, never for stats (its owner chose the bots and settings)
 }
 
 export interface SeatRecord {
@@ -125,7 +133,7 @@ export interface SeatRecord {
 // kind]: the input isn't used), the seed a match started on,
 // the end of match `end`, and the room closing after step `k`.
 export type ReplayLine =
-  | { replay: 1; protocol: number; build: string; room: string; mode: Mode; map: MapId; seed: number; created: number; hold: number; results: number }
+  | { replay: 1; protocol: number; build: string; room: string; mode: Mode; map: MapId; seed: number; created: number; hold: number; results: number; settings?: MatchSettings; lobby?: string; plan?: SeatPlan }
   | { k: number; join: [seat: number, uid: string, name: string, weapon: WeaponId] }
   | { k: number; leave: number }
   | { k: number; in: number[][] }
@@ -153,6 +161,7 @@ export interface RoomOptions {
   build?: string // the pages' build: matchmaking offers its bot seats to pages of the same one
   hold?: number // steps the first match waits at most for the people seated to load it (a room made from a proposal)
   seed?: number // a fixed first seed (checks); fresh from node:crypto otherwise
+  settings?: MatchSettings // how its matches are played; Classic's unless said
   results?: number // seconds the results stay up before the next match
   arena?: Arena // played on instead of the map's own (the netplay check's test yard)
   log?: (message: string, fields: Record<string, unknown>) => void
@@ -160,27 +169,32 @@ export interface RoomOptions {
   reseed?: () => number // each next match's seed (a replay's, as recorded); fresh from node:crypto otherwise
   record?: (match: MatchRecord) => void // a match ended
   journal?: (line: ReplayLine) => void // what a replay needs, as it happens
+  lobby?: string // a custom lobby's room: the lobby's id
+  plan?: SeatPlan // its seats (roster.ts): whose each is, its bots, the empty ones
+  chat?: string // the channel for everyone in the room (a custom lobby's own, so the talk carries on); a new one otherwise
+  over?: (winner: number | null | undefined) => void // a custom room's match is over, results and all: the winning team (free for all: seat), null a draw, undefined abandoned
+  idle?: (human: Human) => boolean // a custom room's person sent nothing for a minute: the lobby takes them out of the match, not off its socket (false: let go as anywhere)
 }
 
 export type Room = ReturnType<typeof createRoom>
 
-export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: first, results = 15, arena = arenaData(map), log = () => {}, created = Date.now(), reseed = freshSeed, record, journal }: RoomOptions) {
+export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: first, settings = classic(kind), results = 15, arena = arenaData(map), log = () => {}, created = Date.now(), reseed = freshSeed, record, journal, lobby, plan, chat: everyone, over, idle }: RoomOptions) {
   let seed = first ?? freshSeed()
-  journal?.({ replay: 1, protocol: PROTOCOL, build, room: id, mode: kind, map, seed, created, hold, results })
+  journal?.({ replay: 1, protocol: PROTOCOL, build, room: id, mode: kind, map, seed, created, hold, results, settings, ...(lobby && { lobby, plan }) })
   const digest = arenaDigest(arena)
   const world = createWorld(arena.colliders)
-  const combatants = recruits(kind, arena, seed, SKILL).map((recruit, i) => enlist(world, i, recruit))
-  const mode = MODES[kind].create({ combatants, arena, world, seed })
+  const combatants = recruits(kind, arena, settings, seed, SKILL, undefined, plan).map((recruit, i) => enlist(world, i, recruit))
+  const mode = MODES[kind].create({ combatants, arena, world, seed, settings })
   let tick = 0
   const recorder = createRecorder(() => tick)
   const humans: Human[] = []
   const rewind = createRewind(world, combatants)
   const fairplay = createFairPlay(combatants.length)
   const flags = { compensate: true } // lag compensation for people's hitscan (the netplay check turns it off to compare)
-  // The simulation's events go out to the pages; a person's hit is also the fair-play watch's.
+  // The simulation's events go out to the pages; a person's hit on a hostile is also the fair-play watch's.
   const events = { ...recorder.sim, hurt: (victim: Combatant, attacker: Combatant) => {
     recorder.sim.hurt(victim, attacker)
-    if (attacker !== victim) fairplay.hit(attacker.id, victim.id, tick)
+    if (attacker.team !== victim.team) fairplay.hit(attacker.id, victim.id, tick)
   } }
   // A person's round meets the others where that person's page drew them;
   // a bot's (a seat's bot too, until its person's first input), or one seen
@@ -198,6 +212,9 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
       return !!human?.last && human.view < tick - 1 && rewind.cast(c, muzzle, human.view, shot, random)
     },
   })
+  plan?.forEach((seat, i) => seat || sim.vacate(combatants[i])) // nobody's: out of play until someone takes it
+  let ended = false // a custom room's match is over: the lobby has heard
+  let deserted = -1 // ms: when its match found itself without a person; -1 while someone is seated
   let next = -1 // the tick the next match starts at, once this one is over
   const full = mode.rules.remaining() // seconds on a match's clock
   let changed = true // the rules had events since the state last went out
@@ -212,9 +229,9 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
 
   const send = (to: Human, message: ServerMessage) => to.send(JSON.stringify(message))
   const personAt = (seat: number) => humans.find((h) => h.seat === seat)
-  const lineUp = () => combatants.map((c) => ({ name: c.name, team: c.team, vehicle: c.vehicle, weapon: weaponId(c.weapon.spec), human: !!personAt(c.id), uid: personAt(c.id)?.uid ?? '' }))
+  const lineUp = () => combatants.map((c) => ({ name: c.name, team: c.team, vehicle: c.vehicle, weapon: weaponId(c.weapon.spec), human: !!personAt(c.id), uid: personAt(c.id)?.uid ?? '', present: c.present }))
   // The room's chat: one channel for everyone, one per side in team deathmatch.
-  const chat = { all: channel(), teams: new Map<number, string>() }
+  const chat = { all: everyone ?? channel(), teams: new Map<number, string>() }
   const teamChannel = (team: number) => {
     if (kind !== 'tdm') return ''
     if (!chat.teams.has(team)) chat.teams.set(team, channel())
@@ -248,9 +265,17 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     mode.report() // drains the rules' events; each browser announces them for its own player
     if (live) {
       if (mode.outcome() !== undefined) finish()
-    } else if (tick >= next) restart()
+    } else if (tick >= next) {
+      if (lobby) end(mode.outcome())
+      else restart()
+    }
+    if (lobby && live && !ended) {
+      if (humans.length) deserted = -1
+      else if (deserted < 0) deserted = now
+      else if (now - deserted >= ABANDON) end(undefined) // nobody watches bots
+    }
     if (tick % (RATE.step / RATE.snap) === 0) broadcast()
-    for (const human of humans) if (now - human.heardAt > IDLE) human.close('idle', 'No input for a minute')
+    for (const human of [...humans]) if (now - human.heardAt > IDLE && !idle?.(human)) human.close('idle', 'No input for a minute')
   }
 
   // The seat's next input into its machine's controls (the last one again
@@ -394,7 +419,17 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
           ...(person && { fairplay: fairplay.summary(c.id) }),
         }
       }),
+      ...(lobby && { custom: { lobby, settings } }),
     }
+  }
+
+  // A custom room's match is over: its lobby hears, once, and closes the room.
+  function end(winner: number | null | undefined) {
+    if (ended) return
+    ended = true
+    sim.standDown()
+    if (winner === undefined) log('match abandoned', { room: id, lobby })
+    over?.(winner)
   }
 
   // The next match, on the same arena and machines, with a fresh seed.
@@ -461,20 +496,24 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
   // not used — every seat keeps the roster's machine. VEHICLES has one entry
   // today; server.check fails the day it has two, until a person is seated
   // in the vehicle they chose.
-  function join(person: { uid: string; name: string; loadout: Loadout; send: Human['send']; close: Human['close'] }, now: number): Human | null {
-    const seat = freeSeat()
-    if (seat < 0) return null
+  // `at`: a custom room's seat for the person (their slot); an empty seat
+  // comes into play for them on the next step, at a start the rules pick.
+  function join(person: { uid: string; name: string; loadout: Loadout; send: Human['send']; close: Human['close'] }, now: number, at = -1): Human | null {
+    const seat = lobby ? at : freeSeat()
+    if (!combatants[seat] || humans.some((h) => h.seat === seat)) return null
     const c = combatants[seat]
-    c.weapon = armWeapon(botGun(WEAPONS[person.loadout.weapon], SKILL))
+    const gun = settings.weapons === 'all' ? person.loadout.weapon : settings.weapons // the match's one gun, whatever the loadout says
+    c.weapon = armWeapon(lobby ? WEAPONS[gun] : botGun(WEAPONS[gun], SKILL)) // a custom seat has no bot at its wheel: their own gun at once
     c.name = person.name
+    if (!c.present) sim.occupy(c)
     const human: Human = { uid: person.uid, name: person.name, seat, send: person.send, close: person.close, queue: [], last: null, repeats: 0, drops: 0, depths: new Array<number>(QUEUE + 1).fill(0), low: Infinity, window: 0, seq: -1, ack: -1, heardAt: now, view: tick }
     humans.push(human)
     fairplay.reset(seat)
     written.delete(seat)
-    journal?.({ k: tick, join: [seat, person.uid, person.name, person.loadout.weapon] })
-    send(human, { t: 'welcome', v: PROTOCOL, room: id, seat, mode: kind, map, seed, tick, rate: RATE, digest, lineUp: lineUp(), chat: { all: chat.all, team: teamChannel(c.team) } })
+    journal?.({ k: tick, join: [seat, person.uid, person.name, gun] })
+    send(human, { t: 'welcome', v: PROTOCOL, room: id, seat, mode: kind, map, seed, settings, tick, rate: RATE, digest, lineUp: lineUp(), chat: { all: chat.all, team: teamChannel(c.team) }, ...(lobby && { lobby }) })
     share(human)
-    for (const other of humans) if (other !== human) send(other, { t: 'ro', seat, name: c.name, human: true, weapon: weaponId(c.weapon.spec), uid: human.uid })
+    for (const other of humans) if (other !== human) send(other, { t: 'ro', seat, name: c.name, human: true, weapon: weaponId(c.weapon.spec), uid: human.uid, present: true })
     return human
   }
 
@@ -485,7 +524,8 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     c.weapon = { ...c.weapon, spec: WEAPONS[weaponId(c.weapon.spec)] }
   }
 
-  // The person is gone: a bot drives their machine on, with its own name and a bot's gun.
+  // The person is gone: a bot drives their machine on, with its own name and
+  // a bot's gun — in a custom room, the seat goes empty instead.
   function leave(human: Human, now: number) {
     const at = humans.indexOf(human)
     if (at < 0) return
@@ -494,10 +534,15 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
     const watched = fairplay.summary(human.seat)
     if (watched.flags.length) log('fairplay', { room: id, match, uid: human.uid, name: human.name, left: true, flags: watched.flags, tally: watched.tally })
     const c = combatants[human.seat]
-    c.brain = createBrain(c.seed, SKILL)
-    c.weapon = armWeapon(botGun(WEAPONS[weaponId(c.weapon.spec)], SKILL))
-    c.name = botName(c.id)
-    for (const other of humans) send(other, { t: 'ro', seat: c.id, name: c.name, human: false, weapon: weaponId(c.weapon.spec), uid: '' })
+    if (lobby) {
+      sim.vacate(c)
+      c.name = ''
+    } else {
+      c.brain = createBrain(c.seed, SKILL)
+      c.weapon = armWeapon(botGun(WEAPONS[weaponId(c.weapon.spec)], SKILL))
+      c.name = botName(c.id)
+    }
+    for (const other of humans) send(other, { t: 'ro', seat: c.id, name: c.name, human: false, weapon: weaponId(c.weapon.spec), uid: '', present: c.present })
     if (!humans.length) emptySince = now
   }
 
@@ -543,7 +588,8 @@ export function createRoom({ id, mode: kind, map, build = '', hold = -1, seed: f
       return hold
     },
     // Takes newcomers: a bot seat left, and the match not over.
-    open: () => next < 0 && freeSeat() >= 0,
+    open: () => !lobby && next < 0 && freeSeat() >= 0, // Classic's matcher and direct seats never see a custom room
+    lobby, // a custom lobby's room: its id
     free: () => combatants.length - humans.length, // bots' seats
     // How far its match has gone: 0 on the grid, 1 at the buzzer (overtime and the results too).
     progress: () => (next >= 0 ? 1 : Math.min(1, Math.max(0, 1 - mode.rules.remaining() / full))),

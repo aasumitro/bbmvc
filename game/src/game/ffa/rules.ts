@@ -1,12 +1,17 @@
+import { SUPPLY } from '../items/config.ts'
+import { distance, itemTypes, weighted, type Errand, type Holder, type Point } from '../items/items.ts'
+import { createSupply, type Collector, type SupplyEvent } from '../items/supply.ts'
+import { respawnWait, type MatchSettings } from '../matchSettings.ts'
+import { LIVES, type Life } from '../mode.ts'
 import { createRng } from '../rng.ts'
 import { chainTitle, createScoring, createStats, createTally, forget, type Stats, type Tally } from '../scoring.ts'
 import { FFA } from './config.ts'
-import { chooseErrand, chooseZone, distance, inside, ITEMS, placeWave, rollType, wants, type Errand, type Holder, type Item, type ItemType, type Point, type Zone } from './items.ts'
 
 // Free for all rules: the match clock and its phases, every machine's life
 // cycle (wreck, wait, respawn, protection), spawn choice, kills, assists and
-// the statistics, streaks, multi-kills, revenge, pickups and their effects,
-// hot zones, standings and the result. Pure: no rendering, physics or DOM —
+// the statistics, streaks, multi-kills, revenge, hot zones, standings and the
+// result, with the pickups (../items/supply.ts) plugged in: its hot zones
+// and comeback pull shape every drop. Pure: no rendering, physics or DOM —
 // the match feeds it damage, wrecks, positions and fixed steps, and reads
 // back modifiers and events. That keeps it portable to an authoritative
 // server later. Contract: work/ffa/FFA_GAMEPLAY_SPEC.md. The statistics
@@ -15,13 +20,19 @@ import { chooseErrand, chooseZone, distance, inside, ITEMS, placeWave, rollType,
 export { createStats, type Stats }
 
 // What the rules need of a machine; the match's combatants are participants.
-export interface Participant extends Holder {
+export interface Participant extends Collector {
   name: string
-  stats: Stats
 }
 
+// A named area of the map a hot zone can open over.
+export interface Zone extends Point {
+  name: string
+  radius: number
+}
+
+export const inside = (zone: Zone | null, p: Point) => !!zone && distance(zone, p) <= zone.radius
+
 export type FfaPhase = 'preMatch' | 'active' | 'finalMinute' | 'overtime' | 'complete'
-export type Life = 'alive' | 'protected' | 'destroyed' | 'pending' | 'respawning'
 
 // Allowed moves (work/ffa/FFA_STATE_MACHINE.md); anything else is refused.
 const PHASES: Record<FfaPhase, readonly FfaPhase[]> = {
@@ -31,16 +42,6 @@ const PHASES: Record<FfaPhase, readonly FfaPhase[]> = {
   overtime: ['complete'],
   complete: [],
 }
-const LIVES: Record<Life, readonly Life[]> = {
-  alive: ['destroyed'],
-  protected: ['alive', 'destroyed'],
-  destroyed: ['pending'],
-  pending: ['respawning', 'destroyed'], // back to destroyed: cancelled by the end of the match
-  respawning: ['protected'],
-}
-
-export type Effect = 'repair' | 'speed' | 'armor' | 'damage'
-export type Effects = Record<Effect, number> // expiry on the match clock; off once it's past
 
 // A machine as the rules see it; the Tally part (this life's hits, kill
 // chain) is the statistics'.
@@ -50,7 +51,6 @@ export interface Contender extends Tally {
   protectedUntil: number
   spawn: number // start of the current life, -1 for none
   spawnedAt: number
-  effects: Effects
   errand: Errand // a bot's errand, rewritten in place
 }
 
@@ -60,23 +60,22 @@ export type FfaEvent =
   | { type: 'death'; victim: number } // wrecked with nobody to credit
   | { type: 'nemesis'; who: number; of: number } // `who` just became the nemesis of `of`
   | { type: 'respawn'; who: number; spawn: number }
-  | { type: 'item'; who: number; item: Item }
-  | { type: 'expired'; item: Item }
-  | { type: 'wave'; count: number }
   | { type: 'zone'; zone: Zone | null }
+  | SupplyEvent
 
 export interface FfaOptions {
   starts: readonly Point[] // the arena's spawn points
   spots: readonly Point[] // where items can appear (validated by the match)
   zones: readonly Zone[] // hot-zone areas
   seed: number
+  settings: MatchSettings // the clock's length
 }
 
 export type FreeForAll = ReturnType<typeof createFreeForAll>
 
 export const multiKillTitle = (chain: number) => chainTitle(chain, FFA.multiKill.titles)
 
-export function createFreeForAll(participants: readonly Participant[], { starts, spots, zones, seed }: FfaOptions) {
+export function createFreeForAll(participants: readonly Participant[], { starts, spots, zones, seed, settings }: FfaOptions) {
   const n = participants.length
   const contender = (i: number): Contender => ({
     life: 'alive',
@@ -85,17 +84,24 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     spawn: starts.length ? i % starts.length : -1, // the grid the match lines up on
     spawnedAt: FFA.preMatch,
     ...createTally(n),
-    effects: { repair: 0, speed: 0, armor: 0, damage: 0 },
     errand: { x: 0, z: 0, urgent: false },
   })
   let random = createRng(seed)
   const lastUsed = starts.map(() => -Infinity) // per start
   const benched = starts.map(() => -Infinity) // spawn camping: out of use until
   const marks = starts.map((): number[] => []) // spawn camping: recent quick deaths
-  let nextWave = FFA.items.firstWave // elapsed
   let nextZone = FFA.hotZone.first
-  let nextItem = 1
   let dirty = true // standings need sorting
+  // The pickups, on the match's stream: each wave pulled into the hot zone and toward trailing machines.
+  const supply = createSupply(participants, {
+    spots,
+    types: itemTypes(settings.items),
+    clock: () => ffa.now,
+    random: () => random(),
+    report: (event) => ffa.events.push(event),
+    points: FFA.score.item,
+    wave: () => ({ count: SUPPLY.perWave, zone: hotArea(ffa.zone, FFA.hotZone.bonusItems), weight: spotWeight(ffa.zone, trailingPositions()) }),
+  })
 
   const ffa = {
     seed,
@@ -105,7 +111,7 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     winner: -1, // participant who took the match; -1 on a draw or while it runs
     draw: false,
     contenders: participants.map((_, i) => contender(i)),
-    items: [] as Item[], // live ones only
+    supply, // the pickups: items on the ground, effects running
     zone: null as Zone | null,
     zoneSpots: [] as number[], // spots inside the zone
     events: [] as FfaEvent[], // the match drains these every step
@@ -120,12 +126,14 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     respawnDue,
     pickSpawn,
     respawned,
+    leave,
+    enter,
     standings,
     place,
     soleLeader,
     trailing,
     nemesisOf,
-    speedFactor,
+    speedFactor: supply.speedFactor, // engine boost from a speed pickup
     targetValue,
     errand,
     reset,
@@ -136,10 +144,10 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
   // --- clock and phases --------------------------------------------------------
 
   function elapsed() {
-    return Math.min(Math.max(ffa.now - FFA.preMatch, 0), FFA.duration)
+    return Math.min(Math.max(ffa.now - FFA.preMatch, 0), settings.duration)
   }
   function remaining() {
-    return FFA.duration - elapsed()
+    return settings.duration - elapsed()
   }
   function overtimeLeft() {
     return ffa.phase === 'overtime' ? Math.max(0, FFA.overtime - (ffa.now - ffa.overtimeAt)) : FFA.overtime
@@ -160,8 +168,8 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     return true
   }
 
-  // One fixed step of match time: phases, protection, effects, hot zones,
-  // item waves, expiry and pickups — in that order.
+  // One fixed step of match time: phases, protection, hot zones, then the
+  // pickups' step (repairs, waves, expiry, pickups) — in that order.
   function tick(dt: number) {
     if (over()) return
     ffa.now += dt
@@ -173,24 +181,15 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     if ((ffa.phase === 'active' || ffa.phase === 'finalMinute') && remaining() <= 0) expire()
     if (ffa.phase === 'overtime' && overtimeLeft() <= 0) complete(-1)
     if (over()) return
-    for (let i = 0; i < n; i++) {
-      const c = ffa.contenders[i]
-      const p = participants[i]
-      if (c.life === 'protected' && ffa.now >= c.protectedUntil) move(c, 'alive')
-      if (c.effects.repair > ffa.now && p.alive) p.health = Math.min(p.maxHealth, p.health + FFA.items.repair.rate * dt)
+    for (const c of ffa.contenders) if (c.life === 'protected' && ffa.now >= c.protectedUntil) move(c, 'alive')
+    const open = ffa.phase !== 'overtime' // no new zone and no wave in overtime
+    // openZone() must precede supply.tick(): zone bonus items are placed
+    // during placeWave inside supply.tick(), which reads the active ffa.zone.
+    if (open && zones.length && supply.types.length && elapsed() >= nextZone) {
+      openZone() // a zone is for its items: none with every pickup off
+      nextZone += FFA.hotZone.duration
     }
-    if (ffa.phase !== 'overtime') {
-      if (zones.length && elapsed() >= nextZone) {
-        openZone()
-        nextZone += FFA.hotZone.duration
-      }
-      if (elapsed() >= nextWave) {
-        wave()
-        nextWave += FFA.items.waveInterval
-      }
-    }
-    expireItems()
-    collect()
+    if (supply.tick(dt, elapsed(), open)) dirty = true
   }
 
   // The clock hit 00:00: one leader takes it, a tie goes to overtime. Waits
@@ -200,7 +199,7 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     if (leader >= 0) return complete(leader)
     if (!setPhase('overtime')) return
     ffa.overtimeAt = ffa.now
-    for (const c of ffa.contenders) if (c.life === 'pending') c.respawnAt = Math.min(c.respawnAt, ffa.now + FFA.respawn.overtime)
+    for (const c of ffa.contenders) if (c.life === 'pending') c.respawnAt = Math.min(c.respawnAt, ffa.now + respawnWait(FFA.respawn, settings, elapsed(), true))
   }
 
   // Ends the match (winner -1: a draw) and clears everything temporary:
@@ -214,17 +213,12 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
       if (c.life === 'protected') move(c, 'alive')
       c.protectedUntil = 0
       c.chain = 0
-      clearEffects(c)
       forget(c)
     }
-    ffa.items.length = 0
+    supply.end()
     ffa.zone = null
     ffa.zoneSpots = []
     dirty = true
-  }
-
-  const clearEffects = (c: Contender) => {
-    c.effects.repair = c.effects.speed = c.effects.armor = c.effects.damage = 0
   }
 
   // --- combat -------------------------------------------------------------------
@@ -232,15 +226,16 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
   // Hull a hit actually takes (0: none) once the attacker's damage boost and
   // the victim's protection or armor (the stronger one) apply; recorded for
   // assists and the statistics. The match subtracts it. A destroyed attacker
-  // does no damage, so nothing scores after its own death.
+  // does no damage, so nothing scores after its own death; nobody's rocket
+  // hurts themselves.
   function damage(attacker: number, victim: number, amount: number) {
     const a = participants[attacker]
     const v = participants[victim]
-    if (!fighting() || !a.alive || !v.alive || !(amount > 0)) return 0
+    if (!fighting() || attacker === victim || !a.alive || !v.alive || !(amount > 0)) return 0
     const hit = ffa.contenders[victim]
     const shield = hit.life === 'protected' && ffa.now < hit.protectedUntil ? FFA.protection.reduction : 0
-    const armor = hit.effects.armor > ffa.now ? FFA.items.armor.reduction : 0
-    const boost = ffa.contenders[attacker].effects.damage > ffa.now ? FFA.items.damage.factor : 1
+    const armor = supply.shield(victim)
+    const boost = supply.damageFactor(attacker)
     const dealt = Math.min(v.health, amount * boost * (1 - Math.max(shield, armor)))
     if (dealt <= 0) return 0
     scoring.hit(attacker, victim, dealt, ffa.now)
@@ -257,7 +252,7 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     if (!fighting()) return true // can't happen through damage(); nothing to score or schedule
     const ended = scoring.death(victim)
     c.protectedUntil = 0
-    clearEffects(c)
+    supply.clear(victim)
     if (ffa.now - c.spawnedAt <= FFA.spawn.campWindow) mark(c.spawn)
     const credited = killer >= 0 && killer !== victim && participants[killer].alive
     if (credited) {
@@ -267,8 +262,9 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     forget(c)
     dirty = true
     if (ffa.phase === 'overtime' && credited && soleLeader() >= 0) complete(soleLeader())
+    if (credited && settings.killLimit > 0 && participants[killer].stats.kills >= settings.killLimit) complete(killer) // first to the limit
     if (over()) return true
-    c.respawnAt = ffa.now + (ffa.phase === 'overtime' ? FFA.respawn.overtime : FFA.respawn.phases.find((phase) => elapsed() < phase.before)!.delay)
+    c.respawnAt = ffa.now + respawnWait(FFA.respawn, settings, elapsed(), ffa.phase === 'overtime')
     move(c, 'pending')
     return true
   }
@@ -301,6 +297,31 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     return true
   }
 
+  // The seat is empty (a custom room's: its person left): out of play where
+  // it stands, quietly — no death, no kill; its wait, protection, effects
+  // and this life's hits forgotten. Left out of spawn choice, the lead and
+  // the standings until someone takes the seat.
+  function leave(i: number) {
+    const c = ffa.contenders[i]
+    if (!move(c, 'absent')) return false
+    c.respawnAt = c.protectedUntil = 0
+    forget(c)
+    supply.clear(i)
+    dirty = true
+    return true
+  }
+
+  // Someone takes the empty seat: due back in at once (the match respawns it).
+  function enter(i: number) {
+    const c = ffa.contenders[i]
+    if (!move(c, 'pending')) return false
+    c.respawnAt = ffa.now
+    dirty = true
+    return true
+  }
+
+  const absent = (i: number) => ffa.contenders[i].life === 'absent'
+
   // The safest start for `who` (see the spec's spawn selection). `sees(rival,
   // at)`: a clear line from that rival to the start. Starts that are occupied
   // (any car, wrecks included) or benched for spawn camping are passed over,
@@ -323,7 +344,7 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
   }
 
   function occupied(who: number, at: Point) {
-    for (let i = 0; i < n; i++) if (i !== who && distance(participants[i].position, at) < FFA.spawn.occupied) return true
+    for (let i = 0; i < n; i++) if (i !== who && !absent(i) && distance(participants[i].position, at) < FFA.spawn.occupied) return true
     return false
   }
 
@@ -371,23 +392,25 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     return sb.kills - sa.kills || sb.combatScore - sa.combatScore || sa.deaths - sb.deaths || a - b
   }
 
+  // Every seat in play, best first.
   function standings() {
     if (dirty) ffa.order.sort(byRank)
     dirty = false
-    return ffa.order
+    return ffa.contenders.some((c) => c.life === 'absent') ? ffa.order.filter((i) => !absent(i)) : ffa.order
   }
 
   function topKills() {
     let top = 0
-    for (const p of participants) top = Math.max(top, p.stats.kills)
+    for (let i = 0; i < n; i++) if (!absent(i)) top = Math.max(top, participants[i].stats.kills)
     return top
   }
 
-  // The one machine with the most kills; -1 while two or more share it.
+  // The one machine in play with the most kills; -1 while two or more share it.
   function soleLeader() {
     let leader = -1
     let top = -1
     for (let i = 0; i < n; i++) {
+      if (absent(i)) continue
       const kills = participants[i].stats.kills
       if (kills > top) {
         top = kills
@@ -408,7 +431,7 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     return standings().indexOf(i) + 1
   }
 
-  // --- items, effects, hot zone ------------------------------------------------------
+  // --- hot zone ------------------------------------------------------------------
 
   function openZone() {
     const zone = chooseZone(random, zones, ffa.zone, trailingPositions())
@@ -416,78 +439,10 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     ffa.zoneSpots = []
     for (let i = 0; i < spots.length; i++) if (inside(zone, spots[i])) ffa.zoneSpots.push(i)
     ffa.events.push({ type: 'zone', zone })
-    for (const spot of placeWave(random, { spots, taken, cars: livePositions(), trailing: [], zone, count: 0, zoneCount: FFA.hotZone.drops })) addItem(spot)
+    supply.drop({ count: 0, zone: hotArea(zone, FFA.hotZone.drops), weight: spotWeight(zone, []) })
   }
 
-  function wave() {
-    const zone = ffa.zone
-    let count = 0
-    for (const spot of placeWave(random, { spots, taken, cars: livePositions(), trailing: trailingPositions(), zone, count: FFA.items.perWave, zoneCount: zone ? FFA.hotZone.bonusItems : 0 })) {
-      if (addItem(spot)) count++
-    }
-    ffa.events.push({ type: 'wave', count })
-  }
-
-  const taken = (spot: number) => ffa.items.some((item) => item.spot === spot)
-  const livePositions = () => participants.filter((p) => p.alive).map((p) => p.position)
   const trailingPositions = () => participants.filter((p, i) => p.alive && trailing(i)).map((p) => p.position)
-
-  function addItem(spot: number) {
-    if (ffa.items.length >= FFA.items.maxActive) return false
-    const at = spots[spot]
-    const hot = inside(ffa.zone, at)
-    const type = rollType(random, hot ? FFA.hotZone.rarity : FFA.items.rarity)
-    const [shortest, longest] = FFA.items.ttl
-    ffa.items.push({ id: nextItem++, type, rarity: ITEMS[type].rarity, x: at.x, z: at.z, spot, born: ffa.now, expires: ffa.now + shortest + random() * (longest - shortest), state: 'spawned', hot })
-    return true
-  }
-
-  function expireItems() {
-    for (let k = ffa.items.length - 1; k >= 0; k--) {
-      const item = ffa.items[k]
-      if (ffa.now < item.expires) continue
-      item.state = 'expired'
-      ffa.items.splice(k, 1)
-      ffa.events.push({ type: 'expired', item })
-    }
-  }
-
-  // Every item goes to the first machine in grid order within reach that wants it.
-  function collect() {
-    const reach = FFA.items.pickupRadius
-    for (let k = ffa.items.length - 1; k >= 0; k--) {
-      const item = ffa.items[k]
-      for (let i = 0; i < n; i++) {
-        const p = participants[i]
-        if (!p.alive || distance(p.position, item) > reach || !wants(item.type, p)) continue
-        item.state = 'consumed'
-        ffa.items.splice(k, 1)
-        apply(i, item.type)
-        p.stats.itemsCollected++
-        p.stats.combatScore += FFA.score.item
-        dirty = true
-        ffa.events.push({ type: 'item', who: i, item })
-        break
-      }
-    }
-  }
-
-  // Instant items change the machine now; timed ones set (or restart) an
-  // expiry — never stacking a strength, never touching a base value.
-  function apply(i: number, type: ItemType) {
-    const p = participants[i]
-    const effects = ffa.contenders[i].effects
-    const t = FFA.items
-    if (type === 'health') p.health = Math.min(p.maxHealth, p.health + t.health.amount)
-    else if (type === 'ammo') {
-      p.weapon.ammo = Math.min(p.weapon.spec.magazine, p.weapon.ammo + t.ammo.magazines * p.weapon.spec.magazine)
-      p.weapon.reload = 0
-    } else effects[type] = Math.max(effects[type], ffa.now + t[type].duration)
-  }
-
-  function speedFactor(i: number) {
-    return ffa.contenders[i].effects.speed > ffa.now ? FFA.items.speed.factor : 1
-  }
 
   // --- bots ---------------------------------------------------------------------
 
@@ -500,9 +455,12 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     return trailing(bot) ? d / FFA.bots.trailingReach : d
   }
 
-  // Where the bot would drive when it isn't fighting (items.ts chooseErrand).
+  // Where the bot would drive when it isn't fighting: an item it knows
+  // about (a trailing bot senses further), else a patrol of the hot zone.
   function errand(bot: number) {
-    return chooseErrand(participants[bot], bot, trailing(bot), ffa.items, spots, ffa.zone, ffa.zoneSpots, ffa.now, ffa.contenders[bot].errand)
+    const behind = trailing(bot)
+    const out = ffa.contenders[bot].errand
+    return supply.errand(bot, behind ? FFA.bots.trailingReach : 1, out) ?? zoneErrand(participants[bot], bot, behind, spots, ffa.zone, ffa.zoneSpots, ffa.now, out)
   }
 
   // --- restart ------------------------------------------------------------------
@@ -520,17 +478,59 @@ export function createFreeForAll(participants: readonly Participant[], { starts,
     ffa.zone = null
     ffa.zoneSpots = []
     ffa.contenders.forEach((c, i) => Object.assign(c, contender(i)))
-    ffa.items.length = 0
+    supply.reset()
     ffa.events.length = 0
     for (const p of participants) Object.assign(p.stats, createStats())
     ffa.order.forEach((_, k) => (ffa.order[k] = k))
     lastUsed.fill(-Infinity)
     benched.fill(-Infinity)
     for (const list of marks) list.length = 0
-    nextWave = FFA.items.firstWave
     nextZone = FFA.hotZone.first
     dirty = true
   }
 
   return ffa
+}
+
+// --- hot zones: the drop's shape, the next zone, bots' patrols ---------------------------------
+
+// A drop's hot area: extra items inside the zone first, rolled on its own table.
+const hotArea = (zone: Zone | null, extras: number) => (zone ? { extras, inside: (at: Point) => inside(zone, at), rarity: FFA.hotZone.rarity } : undefined)
+
+// How free for all weighs a free spot in a drop: x hotZone.weight inside
+// the zone, x comeback.weight near a trailing machine.
+export const spotWeight = (zone: Zone | null, trailing: readonly Point[]) => (at: Point) =>
+  (inside(zone, at) ? FFA.hotZone.weight : 1) * (trailing.some((t) => distance(t, at) <= FFA.comeback.radius) ? FFA.comeback.weight : 1)
+
+// The next hot zone: never the one just closing (unless it's the only one);
+// each trailing machine near a zone adds to its weight.
+export function chooseZone(random: () => number, zones: readonly Zone[], previous: Zone | null, trailing: readonly Point[]) {
+  const weights = zones.map((zone) => (zone === previous && zones.length > 1 ? 0 : 1 + FFA.comeback.zoneWeight * trailing.filter((t) => distance(t, zone) <= FFA.comeback.radius * 1.5).length))
+  const choice = weighted(random, weights)
+  return choice < 0 ? null : zones[choice]
+}
+
+// A hot-zone spot for a bot to drive to: each bot starts at its own place in
+// the zone's list and moves along it every `patrol` seconds, skipping a spot
+// it's already on, so it keeps working the zone's streets.
+function patrol(bot: Holder, index: number, spots: readonly Point[], zone: Zone, zoneSpots: readonly number[], now: number): Point {
+  const first = index + Math.floor(now / FFA.bots.patrol)
+  for (let k = 0; k < zoneSpots.length; k++) {
+    const spot = spots[zoneSpots[(first + k) % zoneSpots.length]]
+    if (distance(bot.position, spot) > FFA.bots.arrive) return spot
+  }
+  return zone
+}
+
+// An idle bot's errand in the hot zone (announced to everyone): a patrol of
+// its streets, if the bot cares for the zone — trailing bots always do.
+// Writes `out`; null for none.
+export function zoneErrand(bot: Holder, index: number, trailing: boolean, spots: readonly Point[], zone: Zone | null, zoneSpots: readonly number[], now: number, out: Errand): Errand | null {
+  const curious = trailing || ((index * 0.618034) % 1) < FFA.bots.zoneInterest // golden-ratio spread over the grid
+  if (!zone || !curious) return null
+  const spot = patrol(bot, index, spots, zone, zoneSpots, now)
+  out.x = spot.x
+  out.z = spot.z
+  out.urgent = false
+  return out
 }

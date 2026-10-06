@@ -1,10 +1,12 @@
 import { useSyncExternalStore } from 'react'
+import { currentCustom, onCustom } from '../net/custom'
 import { currentSearch, onSearch } from '../net/matchmaking'
 
-// What the screens read of Classic's matchmaking (net/matchmaking.ts), and
-// the clock they count its times with.
+// What the screens read of Classic's matchmaking (net/matchmaking.ts) and of
+// custom lobbies (net/custom.ts), and the clock they count their times with.
 
 export const useSearch = () => useSyncExternalStore(onSearch, currentSearch)
+export const useCustom = () => useSyncExternalStore(onCustom, currentCustom)
 
 // The time now (performance.now()), fresh every `ms` while `on`: the clocks
 // the screens count with. Read at render; the ticks are the subscription.

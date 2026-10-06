@@ -109,12 +109,49 @@ reporting, per-frame scenery, debug lines, restart and dispose.
 The runtime never branches on the mode; the HUD and results screen show a
 mode's own panels by narrowing `match.mode.kind`.
 
-- Free for all: each machine its own team; pickups and the hot zone are
-  drawn by `ffa/pickups.ts`, handed to the adapter by the registry, so the
-  adapter itself runs headless.
+- Free for all: each machine its own team; pickups are drawn by
+  `items/pickups.ts` and the hot zone by `ffa/zone.ts`, handed to the
+  adapter by the registry, so the adapter itself runs headless.
 - Team deathmatch: seats from the arena's two bases; the team AI is
   `tdm/tactics.ts` behind the plan hooks; firing ends spawn protection
-  through `fired`.
+  through `fired`; pickups only when a custom lobby turns them on.
+
+How a match is played comes in as `MatchSettings` (`game/matchSettings.ts`:
+the line-up's size, the clock, respawn speed, friendly fire, pickups,
+weapons, kill limit): Classic and practice pass `classic(mode)`, the
+mode's own numbers; a custom lobby's room passes its owner's.
+
+## Pickups: the supply
+
+`items/supply.ts` is one match's pickups, for whichever mode plugs it in:
+the items on the ground, waves on the match clock, expiry, who picks what
+up, and what each machine has running (repair, speed, armor, damage
+boost). The mode's rules own it (pure, node-checked) and create it with the
+spots items may appear on, the types the match's settings allow
+(`items/items.ts` `itemTypes`), the rules' clock and random stream, the
+event queue to report into, the combat score an item earns, and `wave()`,
+which shapes each drop: free for all adds its hot zone and comeback
+weights (the zone itself stays in `ffa/rules.ts`), team deathmatch drops
+plain waves. The rules tick it and ask it how hard a hit lands
+(`damageFactor`, `shield`) and how fast a machine goes (`speedFactor`);
+bots take its errands. The HUD's effect chips and the minimap read
+`MatchMode.supply`; `items/pickups.ts` draws the tokens. Free for all
+always plugs it in (a custom lobby may turn every group off); team
+deathmatch only when a custom lobby turns any group on.
+
+## Seats that can be empty
+
+A custom lobby's match has seats nobody holds and no bot drives. Every
+per-seat array keeps its length (snapshots, rewind, fair play,
+statistics); the machine is out of play: `Combatant.present` false, its
+body disabled (rays, blasts and cars pass through), never alive, and in
+the rules' `absent` life: never due to respawn, out of spawn choice, the
+lead and the standings. The simulation's `vacate(c)` takes a machine out
+quietly (no death, no kill); `occupy(c)` brings it back on the next step
+through a respawn at a start the rules pick, protected. On the wire an
+empty seat's car row carries the `absent` flag, and a welcome's seat and a
+`ro` say whether it is present; the page hides absent machines (view,
+markers, minimap, scoreboard, results). Classic never makes one.
 
 ## Checks and build
 
@@ -176,11 +213,12 @@ From `game/`:
 3. UI integration: its HUD panel and results panel (narrow on
    `match.mode.kind`); `MapSelect` lists it from the registry.
 
-**A pickup** (free for all)
-1. `ffa/items.ts`: an `ITEMS` entry (label, rarity, colour); `ffa/rules.ts`
-   `apply()` for its effect (a timed effect is an `Effect` key).
-2. `ffa/pickups.ts`: its token geometry; the HUD effect chip list (`EFFECTS`
-   in `Hud.tsx`) if it is timed.
+**A pickup** (any mode that plugs the supply in)
+1. `items/items.ts`: an `ITEMS` entry (label, rarity, colour) and its group
+   (`GROUPS`: what a custom lobby turns on); `items/supply.ts` `apply()` for
+   its effect (a timed effect is an `Effect` key).
+2. `items/pickups.ts`: its token geometry; the HUD effect chip list
+   (`EFFECTS` in `Hud.tsx`) if it is timed.
 3. `ffa/ffa.check.ts`: its effect.
 
 **A HUD feature**

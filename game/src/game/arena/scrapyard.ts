@@ -405,8 +405,9 @@ export function buildScrapyard(seed = 1): Arena {
 
   // --- starts ---
   // Free for all: two on each edge of the perimeter road, facing along it
-  // toward the spoke's junction. Crews: a grid of four on the north (the
-  // player's) and south gate aprons, facing in.
+  // toward the spoke's junction. Crews: a row of six on the north (the
+  // player's) and south gate aprons, facing in — the middle four first (a
+  // crew of four starts there), then the outer pair (six a side).
   const spawns: SpawnPoint[] = []
   for (const angle of SPOKES) {
     for (const s of [-24, 24]) {
@@ -420,7 +421,7 @@ export function buildScrapyard(seed = 1): Arena {
     [0, SPOKES[6]],
     [1, SPOKES[2]],
   ]) {
-    for (const s of [-4.5, 4.5, -13.5, 13.5]) {
+    for (const s of [-4.5, 4.5, -13.5, 13.5, -22.5, 22.5]) {
       const [x, z] = beside(angle, APOTHEM - 5.5, s)
       bases[team].push({ position: new THREE.Vector3(x, 0, z), heading: facingCentre(angle) })
     }

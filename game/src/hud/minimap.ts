@@ -1,5 +1,6 @@
 import type { Arena } from '../game/arena/arena'
-import { ITEMS, type Item, type Zone } from '../game/ffa/items'
+import type { Zone } from '../game/ffa/rules'
+import { ITEMS, type Item } from '../game/items/items'
 
 // Tactical minimap drawn from the arena's own floor plan (Arena.paintMap) and
 // collider footprints — no image. The layout is painted once; each frame the
@@ -15,9 +16,9 @@ interface Blip {
   position: { x: number; z: number }
 }
 
-// Free for all extras: the hot zone (always, with a rim arrow when it's off
-// the map), items within `range` of the player — what a bot knows too — and
-// a ring round the sole leader.
+// The mode's extras: items within `range` of the player — what a bot knows
+// too — and, in free for all, the hot zone (always, with a rim arrow when
+// it's off the map) and a ring round the sole leader.
 export interface MapMarks {
   zone: Zone | null
   items: readonly Item[]

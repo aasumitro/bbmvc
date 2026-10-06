@@ -1,8 +1,9 @@
-// Free for all tuning: every number the FFA rules, items, hot zones and bot
-// errands read. Seconds are simulation time (fixed physics steps), so pause
-// and frame rate never change them; distances are metres. "Elapsed" is match
-// time since the start signal (0:00 up to 10:00); the HUD clock shows what
-// remains. work/ffa/FFA_BALANCING.md explains each value.
+// Free for all tuning: every number the FFA rules, hot zones and bot errands
+// read (the items' own: ../items/config.ts). Seconds are simulation time
+// (fixed physics steps), so pause and frame rate never change them;
+// distances are metres. "Elapsed" is match time since the start signal (0:00
+// up to 10:00); the HUD clock shows what remains. work/ffa/FFA_BALANCING.md
+// explains each value.
 
 export const FFA = {
   grid: 8, // machines: the player and seven bots
@@ -14,12 +15,13 @@ export const FFA = {
   overtime: 60, // sudden death after a tie at the buzzer; nobody breaks it and it's a draw
 
   respawn: {
-    // Wait, fixed by the elapsed time at the moment of death.
+    // Wait, fixed by the share of the match clock gone at the moment of death
+    // (3, 5 and 8 minutes of ten); a match's settings scale it (../matchSettings.ts).
     phases: [
-      { before: 3 * 60, delay: 5 },
-      { before: 5 * 60, delay: 10 },
-      { before: 8 * 60, delay: 15 },
-      { before: Infinity, delay: 20 },
+      { share: 0.3, delay: 5 },
+      { share: 0.5, delay: 10 },
+      { share: 0.8, delay: 15 },
+      { share: Infinity, delay: 20 },
     ],
     overtime: 5, // deaths in overtime; longer waits carried into overtime are cut to this from its start
   },
@@ -58,27 +60,6 @@ export const FFA = {
   // Combat score: informational, never decides a placement above a kill.
   score: { kill: 100, assist: 50, damage: 0.5, multiKill: 25, streak: 25, revenge: 25, item: 10 }, // damage: per hull point dealt; multiKill: per extra kill in the chain
 
-  items: {
-    firstWave: 2 * 60, // elapsed
-    waveInterval: 2 * 60,
-    perWave: 6,
-    maxActive: 16,
-    ttl: [45, 60],
-    pickupRadius: 3.5,
-    senseRange: 75, // what the minimap shows the player, and all a bot knows about
-    spacing: 30, // between items of one wave, when the map allows
-    clearOfCars: 15, // no item appears this close to a live machine
-    clearOfStarts: 25, // item spots stay this far from the starts
-    clearance: 1.8, // item spots need this much room from anything solid
-    rarity: { common: 70, rare: 25, epic: 5 },
-    health: { amount: 40 },
-    repair: { rate: 10, duration: 6 }, // hull per second
-    speed: { factor: 1.3, duration: 8 }, // engine pull and top speed
-    armor: { reduction: 0.35, duration: 12 },
-    damage: { factor: 1.5, duration: 10 },
-    ammo: { magazines: 1 }, // added, capped at a full magazine
-  },
-
   hotZone: {
     first: 90, // elapsed
     duration: 2 * 60, // then the next zone takes over
@@ -98,7 +79,6 @@ export const FFA = {
   bots: {
     leaderBias: 15, // the sole leader counts as this much nearer when a bot picks a target
     trailingReach: 1.15, // trailing bots hunt and sense items this much further
-    lowHealth: 0.4, // below this share of hull, a bot heads for health it knows about even mid-fight
     zoneInterest: 0.6, // share of bots that patrol the hot zone when idle (trailing bots always do)
     patrol: 10, // seconds before a patrolling bot moves on to the next spot in the zone...
     arrive: 8, // ...or once it's this close to the one it was heading for

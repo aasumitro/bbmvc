@@ -1,22 +1,19 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { materials } from '../materials/library'
-import { FFA } from './config'
-import { ITEMS, RARITY_COLORS, type Item, type ItemType, type Rarity, type Zone } from './items'
+import { SUPPLY } from './config'
+import { ITEMS, RARITY_COLORS, type Item, type ItemType, type Rarity } from './items'
 
-// What free-for-all items and the hot zone look like. Each item: a glowing
-// token in its type's colour, spinning over a soft pool of its rarity's
-// colour, with a light column to spot it from down the street; it blinks
-// through its last seconds. The hot zone: a ring on the streets and posts of
-// light round it. View only — it mirrors the rules every frame from a fixed
-// pool, so nothing is created or left behind during play.
+// What items look like on the ground. Each item: a glowing token in its
+// type's colour, spinning over a soft pool of its rarity's colour, with a
+// light column to spot it from down the street; it blinks through its last
+// seconds. View only — it mirrors the supply every frame from a fixed pool,
+// so nothing is created or left behind during play.
 
 const TYPES = Object.keys(ITEMS) as ItemType[]
 const RARITIES: Rarity[] = ['common', 'rare', 'epic']
 const HOVER = 1.3 // token height, metres
 const BLINK = 5 // seconds before expiry the token starts blinking
-const POSTS = 10 // light posts round the hot zone
-const ZONE_COLOR = '#ff5a1f'
 
 function tokenGeometry(type: ItemType) {
   switch (type) {
@@ -35,16 +32,16 @@ function tokenGeometry(type: ItemType) {
   }
 }
 
+export type Pickups = ReturnType<typeof createPickups>
+
 export function createPickups(scene: THREE.Scene) {
   const root = new THREE.Group()
   root.name = 'pickups'
   const tokens = Object.fromEntries(TYPES.map((type) => [type, tokenGeometry(type)])) as Record<ItemType, THREE.BufferGeometry>
   const pool = new THREE.CircleGeometry(1.7, 32).rotateX(-Math.PI / 2)
   const column = new THREE.PlaneGeometry(1.3, 16) // centred on the ground: the ground hides the lower half
-  const ring = new THREE.RingGeometry(0.985, 1, 128).rotateX(-Math.PI / 2)
-  const post = new THREE.PlaneGeometry(2.4, 22)
 
-  const slots = Array.from({ length: FFA.items.maxActive }, (_, k) => {
+  const slots = Array.from({ length: SUPPLY.maxActive }, (_, k) => {
     const group = new THREE.Group()
     const token = new THREE.Mesh(tokens[TYPES[k % TYPES.length]], materials.light(ITEMS[TYPES[k % TYPES.length]].color, 3))
     const glow = new THREE.Mesh(pool, materials.glow(RARITY_COLORS[RARITIES[k % 3]], 0.55))
@@ -56,16 +53,7 @@ export function createPickups(scene: THREE.Scene) {
     root.add(group)
     return { group, token, glow, beam, id: -1 }
   })
-
-  const zone = new THREE.Group()
-  const band = new THREE.Mesh(ring, materials.light(ZONE_COLOR, 2.5))
-  band.position.y = 0.2 // over the kerbs
-  const posts = Array.from({ length: POSTS }, () => new THREE.Mesh(post, materials.glow(ZONE_COLOR, 0.5)))
-  zone.add(band, ...posts)
-  zone.position.y = -100
-  root.add(zone)
   scene.add(root)
-  let shown: Zone | null | undefined
 
   function assign(slot: (typeof slots)[number], item: Item) {
     slot.id = item.id
@@ -77,8 +65,8 @@ export function createPickups(scene: THREE.Scene) {
   }
 
   return {
-    // Mirrors the live items and the zone; `now` is the match clock.
-    update(items: readonly Item[], hot: Zone | null, now: number, camera: THREE.Camera) {
+    // Mirrors the live items; `now` is the match clock.
+    update(items: readonly Item[], now: number, camera: THREE.Camera) {
       for (let k = 0; k < slots.length; k++) {
         const slot = slots[k]
         const item = items[k]
@@ -93,29 +81,17 @@ export function createPickups(scene: THREE.Scene) {
         slot.token.visible = item.expires - now > BLINK || Math.floor(now * 6) % 2 === 0
         slot.beam.rotation.y = Math.atan2(camera.position.x - item.x, camera.position.z - item.z)
       }
-      if (hot !== shown) {
-        shown = hot
-        zone.visible = !!hot
-        if (hot) {
-          zone.position.set(hot.x, 0, hot.z)
-          band.scale.setScalar(hot.radius)
-          posts.forEach((p, i) => p.position.set(Math.cos((i / POSTS) * Math.PI * 2) * hot.radius, 0, Math.sin((i / POSTS) * Math.PI * 2) * hot.radius))
-        }
-      }
-      if (hot) for (const p of posts) p.rotation.y = Math.atan2(camera.position.x - hot.x - p.position.x, camera.position.z - hot.z - p.position.z)
     },
     clear() {
       for (const slot of slots) {
         slot.group.visible = false
         slot.id = -1
       }
-      zone.visible = false
-      shown = null
     },
     // Geometries are this view's own; materials belong to the library.
     dispose() {
       scene.remove(root)
-      for (const geometry of [...Object.values(tokens), pool, column, ring, post]) geometry.dispose()
+      for (const geometry of [...Object.values(tokens), pool, column]) geometry.dispose()
     },
   }
 }

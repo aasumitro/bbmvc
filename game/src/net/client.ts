@@ -10,7 +10,7 @@ import { forwardSpeed } from '../game/vehicle/drive'
 import { VEHICLES } from '../game/vehicle/vehicles'
 import type { Link } from './connection'
 import { createPrediction } from './prediction'
-import { blankCar, inputMessage, RATE, readCar, readMe, readStats, weaponId, type CarState, type Snapshot, type State, type Welcome, type WireEvent } from './protocol'
+import { blankCar, inputMessage, RATE, readCar, readMe, readStats, weaponId, type CarState, type ServerMessage, type Snapshot, type State, type Welcome, type WireEvent } from './protocol'
 import { createSnapshotBuffer } from './snapshots'
 
 // A browser's copy of an online match, free of the DOM (the headless checks
@@ -32,16 +32,27 @@ const EASE = 0.035 // seconds: a correction's offset on screen falls to a third 
 
 // The match as the welcome describes it, built locally: every machine on
 // its seat's start — the others moved by the server's word alone
-// (kinematic), the player's own driven here too — the mode on the same
-// seed. `scene`: the browser's, for the mode's own scenery.
+// (kinematic), the player's own driven here too; an empty seat's out of
+// play — the mode on the same seed. `scene`: the browser's, for the mode's
+// own scenery.
 export function seatOnline(welcome: Welcome, arena: Arena, scene?: THREE.Scene) {
   const kind = welcome.mode as Mode
   const world = createWorld(arena.colliders)
-  const seats = MODES[kind].lineUp(arena)
+  const seats = MODES[kind].lineUp(arena, welcome.settings.size)
   const combatants = welcome.lineUp.map((seat, id) => enlist(world, id, { name: seat.name, team: seat.team, seed: id + 1, spawn: seats[id].spawn, vehicle: seat.vehicle, weapon: WEAPONS[seat.weapon], bot: false }))
   for (const c of combatants) if (c.id !== welcome.seat) c.car.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true)
-  const mode = MODES[kind].create({ combatants, arena, world, seed: welcome.seed, scene })
+  welcome.lineUp.forEach((seat, id) => seat.present || id === welcome.seat || present(combatants[id], false)) // the player's own seat is theirs, coming into play
+  const mode = MODES[kind].create({ combatants, arena, world, seed: welcome.seed, settings: welcome.settings, scene })
   return { kind, world, combatants, player: combatants[welcome.seat], mode }
+}
+
+// A machine into play, or out of it (an empty seat), as the server says:
+// out, its body leaves this page's world too — the crosshair and sight
+// lines pass where it stood — and nothing draws it.
+function present(c: Combatant, on: boolean) {
+  c.present = on
+  if (!on) c.alive = false
+  c.car.body.setEnabled(on)
 }
 
 export interface ClientOptions {
@@ -92,7 +103,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     for (const { message, at } of messages) {
       if (message.t === 's') snapshot(message, at, catchUp)
       else if (message.t === 'st') state(message)
-      else if (message.t === 'ro') roster(message.seat, message.name, message.human, message.weapon, message.uid)
+      else if (message.t === 'ro') roster(message)
     }
     if (catchUp) settle()
     net.lost = link.status.closed
@@ -196,11 +207,11 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     net.hold = st.hold
   }
 
-  function roster(seat: number, name: string, human: boolean, weapon: keyof typeof WEAPONS, uid: string) {
+  function roster({ seat, name, human, weapon, uid, present }: Extract<ServerMessage, { t: 'ro' }>) {
     const c = combatants[seat]
     if (!c) return
     // people coming and going, in the feed (the player's own seat never changes hands)
-    if (human !== humans[seat] && c !== player) feed?.news(human ? `${name} joined` : `${c.name} left`, human ? '' : 'A bot takes over')
+    if (human !== humans[seat] && c !== player) feed?.news(human ? `${name} joined` : `${c.name} left`, human || !present ? '' : 'A bot takes over')
     c.name = name
     humans[seat] = human
     uids[seat] = uid
@@ -293,9 +304,9 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     else events.respawned(c)
   }
 
-  // After a catch-up: every machine shown whole or wrecked as the newest snapshot has it.
+  // After a catch-up: every machine in play shown whole or wrecked as the newest snapshot has it.
   function settle() {
-    for (const c of combatants) show(c, !latest[c.id].alive)
+    for (const c of combatants) if (latest[c.id].present) show(c, !latest[c.id].alive)
   }
 
   // --- the machines where they're shown ---------------------------------------------------------------------
@@ -333,6 +344,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
       c.last.rotation.copy(c.rotation)
       c.last.velocity.copy(c.velocity)
       if (c === player) continue
+      if (net.snapshots && c.present !== car.present) present(c, car.present) // the welcome's word until the first snapshot
       c.health = car.health
       c.alive = car.alive
       Object.assign(c.control, { throttle: car.throttle, handbrake: car.handbrake, fire: car.fire && car.alive })
@@ -360,7 +372,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     if (predicting) prediction.drive(seq, { throttle: Math.round(control.throttle * 100) / 100, steer: Math.round(control.steer * 100) / 100, handbrake: control.handbrake }, held(seq), mode.speedFactor(player.id), dt)
     for (const c of combatants) {
       c.deadFor = c.alive ? 0 : c.deadFor + dt
-      if (c === player && predicting) continue
+      if ((c === player && predicting) || !c.present) continue
       const { body, controller } = c.car
       if (c.position.distanceTo(body.translation() as THREE.Vector3) > TELEPORT) {
         body.setTranslation(c.position, false)

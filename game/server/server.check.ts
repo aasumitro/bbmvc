@@ -4,8 +4,9 @@
 // server decides (the hold, driving, fire rate, damage, wrecks, scores,
 // respawns), forged and stale input, people coming and going, the end of a
 // match and the next one, that a room is the practice simulation and nothing
-// more, and what it all costs (bytes a player, milliseconds a step) on both
-// real arenas. Bundled: npm run server:check.
+// more, whole Classic matches pinned by hash, and what it all costs (bytes a
+// player, milliseconds a step) on both real arenas. Bundled: npm run server:check.
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { request } from 'node:http'
 import type { Socket } from 'node:net'
@@ -16,13 +17,15 @@ import { WebSocket as WsClient } from 'ws'
 import { arenaDigest } from '../src/game/arena/digest'
 import { WEAPONS } from '../src/game/combat'
 import { MAPS, type MapId } from '../src/game/maps'
+import { classic } from '../src/game/matchSettings'
 import { MODES, type Mode } from '../src/game/modes'
 import { initPhysics, createWorld, PHYSICS_STEP } from '../src/game/physics'
-import { BOT_VEHICLE, recruits } from '../src/game/roster'
+import { DIFFICULTIES } from '../src/game/ai'
+import { BOT_VEHICLE, recruits, type SeatPlan } from '../src/game/roster'
 import { createSimulation, enlist, type Combatant } from '../src/game/simulation'
 import { placeCar } from '../src/game/vehicle/drive'
 import { VEHICLES } from '../src/game/vehicle/vehicles'
-import { AIM_MARGIN, BUILD, inputMessage, parseClient, PROTOCOL, readCar, readServer, STAT_KEYS, wireSize, type ServerMessage, type Snapshot, type Welcome } from '../src/net/protocol'
+import { AIM_MARGIN, BUILD, inputMessage, parseClient, PROTOCOL, readCar, readServer, STAT_KEYS, weaponId, wireSize, type ServerMessage, type Snapshot, type Welcome } from '../src/net/protocol'
 import { arenaData } from './arenas'
 import { mintToken } from './auth'
 import { createRecorder } from './recorder'
@@ -203,7 +206,7 @@ const b = await player('u-b')
   const [wa, wb] = [welcomeOf(a), welcomeOf(b)]
   check(wa.room === wb.room && wa.seat !== wb.seat, 'two players on the same mode and arena share a room, in two seats')
   check(wa.digest === arenaDigest(arenaData('scrapyard')) && wa.digest === room.digest, 'the welcome carries the server’s arena digest')
-  check(wa.lineUp.length === MODES.tdm.lineUp(arenaData('scrapyard')).length && wb.lineUp.filter((s) => s.human).length === 2, 'the line-up is the mode’s, the players flagged')
+  check(wa.lineUp.length === MODES.tdm.lineUp(arenaData('scrapyard'), classic('tdm').size).length && wb.lineUp.filter((s) => s.human).length === 2, 'the line-up is the mode’s, the players flagged')
   check(wa.seat === 0 && wb.seat === 4 && room.combatants[wb.seat].team !== room.combatants[wa.seat].team, 'the second player goes to the side with fewer players')
   check(wb.lineUp.filter((s) => !s.human).length === 6 && room.combatants.filter((c) => c.id !== wa.seat && c.id !== wb.seat).every((c) => !room.humans.some((h) => h.seat === c.id)), 'bots hold the other six seats')
   check(!!a.last('st') && a.of('ro').some((r) => r.seat === wb.seat && r.human), 'the state follows the welcome; the others hear of a new player')
@@ -562,6 +565,123 @@ const accept = (p: Probe) => {
 }
 await queue.close()
 
+// --- custom lobbies, over real sockets --------------------------------------------------------------------
+
+// A server of its own: a lobby's grace in tenths of a second, a second of
+// results. A session (a hello with no map) watches the list, makes or joins
+// a lobby, and its match comes to the same socket, which goes back to the
+// lobby when the match is over.
+const partyLogs: Array<Record<string, unknown>> = []
+const party = createGameServer({ port: 0, key: KEY, origins: [ORIGIN], maxRooms: 2, grace: 1500, results: 1, matchmaking: WINDOWS, lobbies: { grace: 800, listEvery: 50 }, log: (line) => partyLogs.push(line) })
+const partyPort = await party.listen()
+async function guest(uid: string) {
+  const p = await probe(ORIGIN, partyPort)
+  p.send({ t: 'hello', v: PROTOCOL, build: BUILD, token: token(uid), guest: true, loadout: { vehicle: 'razor', weapon: 'minigun' } })
+  return p
+}
+const lobbyIn = (p: Probe) => p.last('lb')?.lobby ?? null
+const health = () => new Promise<Record<string, number>>((resolve) => request({ port: partyPort, path: '/health' }, (res) => res.on('data', (data) => resolve(JSON.parse(String(data))))).end())
+{
+  const w = await guest('l-w')
+  w.send({ t: 'lb', do: 'watch' })
+  await until(() => !!w.last('lbs'), 1000, 'the list')
+  const settings = { ...classic('ffa'), size: 12, duration: 300 }
+  const o = await guest('l-owner-0001')
+  o.send({ t: 'lb', do: 'create', name: '  Friday   night ', open: true, password: 'hunter22', mode: 'ffa', map: 'city', settings, jip: true })
+  await until(() => !!lobbyIn(o), 1000, 'the lobby made')
+  const made = lobbyIn(o)!
+  await until(() => w.last('lbs')!.list.length === 1, 1000, 'the list to show it')
+  const row = w.last('lbs')!.list[0]
+  const maker = made.slots[0]
+  check(made.name === 'Friday night' && made.you === 0 && maker.kind === 'person' && maker.owner && row.id === made.id && row.locked && row.host === maker.name, 'a lobby made (its name tidied): its maker owns it, and the list shows it, locked, under their name')
+  check(!JSON.stringify(w.inbox).includes(made.code) && !JSON.stringify(w.inbox).includes('hunter22') && !JSON.stringify(w.inbox).includes('l-owner-0001'), 'the list never carries its code, its password or anyone’s user id')
+
+  const p = await guest('l-p')
+  p.send({ t: 'lb', do: 'join', id: made.id, password: 'wrong' })
+  await until(() => p.last('lb')?.note === 'password', 1000, 'a wrong password')
+  p.send({ t: 'lb', do: 'join', id: made.id, password: 'hunter22' })
+  await until(() => lobbyIn(p)?.you === 1, 1000, 'the right one')
+  const q = await guest('l-q')
+  q.send({ t: 'lb', do: 'code', code: made.code })
+  await until(() => lobbyIn(q)?.you === 2, 1000, 'the invite code')
+  check(lobbyIn(q)!.code === made.code && lobbyIn(o)!.people === 3, 'the password lets p in from the list; the code lets q in without it')
+
+  const s = await guest('l-s')
+  s.send({ t: 'mm', do: 'search', mode: 'ffa', map: 'city' })
+  await until(() => !!party.lobby.matchmaker.ticketOf('l-s'), 1000, 'a Classic ticket')
+  s.send({ t: 'lb', do: 'code', code: made.code })
+  await until(() => !!lobbyIn(s), 1000, 'the searcher into the lobby')
+  check(!party.lobby.matchmaker.ticketOf('l-s'), 'joining a lobby ends a Classic ticket')
+  s.send({ t: 'mm', do: 'search', mode: 'ffa', map: 'city' })
+  await wait(150)
+  check(!party.lobby.matchmaker.ticketOf('l-s'), 'and no ticket while in a lobby')
+  s.send({ t: 'lb', do: 'leave' })
+  await until(() => s.last('lb')?.lobby === null, 1000, 'the searcher leaving')
+
+  p.send({ t: 'lb', do: 'ready', on: true })
+  q.send({ t: 'lb', do: 'ready', on: true })
+  await until(() => lobbyIn(o)!.slots.filter((slot) => slot.kind === 'person' && slot.ready).length === 2, 1000, 'both ready')
+  o.send({ t: 'lb', do: 'start' })
+  await until(() => [o, p, q].every((x) => !!x.last('welcome')), 3000, 'the match to start')
+  const room = party.lobby.rooms.find((r) => r.lobby === made.id)!
+  const wo = welcomeOf(o)
+  check(!!room && [p, q].every((x) => welcomeOf(x).room === room.id) && wo.lobby === made.id && wo.chat.all === made.chat && wo.lineUp.filter((seat) => seat.present).length === 3 && wo.lineUp.length === 12, 'three of twelve start: one room, on the sockets they were in the lobby on; the lobby’s chat goes on in it; nine seats empty')
+  const counts = await health()
+  check(counts.custom === 1 && counts.lobbies === 1 && counts.rooms === 1, 'the server counts its rooms by kind')
+  const direct = await probe(ORIGIN, partyPort)
+  direct.hello(token('l-d'), { mode: 'ffa', map: 'city' })
+  await until(() => !!direct.last('welcome'), 3000, 'a direct seat')
+  check(welcomeOf(direct).room !== room.id && !room.open(), 'Classic never lands in a custom room')
+  direct.ws.close()
+
+  const r = await guest('l-r')
+  r.send({ t: 'lb', do: 'code', code: made.code })
+  await until(() => !!r.last('welcome'), 2000, 'join in progress')
+  check(welcomeOf(r).room === room.id && room.humans.length === 4, 'join in progress: a newcomer goes straight in')
+  o.send({ t: 'lb', do: 'kick', uid: 'l-r' })
+  await until(() => r.last('lb')?.note === 'kicked', 1000, 'the kick')
+  check(room.humans.length === 3 && !room.combatants[welcomeOf(r).seat].present, 'kicked in a match: out of it, the seat empty')
+
+  q.send({ t: 'lb', do: 'wait' })
+  await until(() => lobbyIn(q)?.playing === false, 1000, 'back to the waiting room')
+  check(room.humans.length === 2, 'back to the waiting room: out of the match, in the lobby, on the same socket')
+  const welcomes = q.of('welcome').length
+  q.send({ t: 'lb', do: 'play' })
+  await until(() => q.of('welcome').length === welcomes + 1, 1000, 'into the match again')
+  check(room.humans.length === 3, 'and into the match again')
+  room.humans.find((h) => h.uid === 'l-q')!.heardAt = -Infinity // a minute and more without input
+  await until(() => lobbyIn(q)?.playing === false, 1000, 'the idle member out of the match')
+  check(room.humans.length === 2 && !q.closed() && lobbyIn(o)!.slots.some((slot) => slot.kind === 'person' && slot.uid === 'l-q' && !slot.away), 'a minute without input in a custom match: back in the waiting room, the lobby’s socket kept (Classic lets the socket go)')
+  q.send({ t: 'lb', do: 'play' })
+  await until(() => q.of('welcome').length === welcomes + 2 && room.humans.length === 3, 1000, 'into the match once more')
+
+  p.ws.close()
+  await until(() => lobbyIn(o)!.slots.some((slot) => slot.kind === 'person' && slot.away), 1000, 'the drop')
+  const p2 = await guest('l-p')
+  p2.send({ t: 'lb', do: 'back', id: made.id })
+  await until(() => !!p2.last('welcome'), 2000, 'back in the match')
+  check(welcomeOf(p2).room === room.id && room.humans.length === 3 && !lobbyIn(o)!.slots.some((slot) => slot.kind === 'person' && slot.away), 'dropped, back within the grace: their seat again')
+
+  await until(() => room.hold < 0, 3000, 'the load timeout')
+  room.combatants[wo.seat].stats.kills = 1
+  Object.assign(room.mode.rules, { now: 3 + settings.duration - 0.05 })
+  await until(() => lobbyIn(o)?.phase === 'waiting', 3000, 'the match over')
+  const after = lobbyIn(o)!
+  check(after.tally['l-owner-0001'] === 1 && !after.playing && [p2, q].every((x) => lobbyIn(x)?.phase === 'waiting' && !lobbyIn(x)?.playing) && !party.lobby.rooms.includes(room), 'the match over after its results: everyone back in the waiting room on the same socket, the winner in the tally, the room closed')
+  p2.send({ t: 'lb', do: 'ready', on: true })
+  q.send({ t: 'lb', do: 'ready', on: true })
+  await until(() => lobbyIn(o)!.slots.filter((slot) => slot.kind === 'person' && slot.ready).length === 2, 1000, 'ready again')
+  const before = o.of('welcome').length
+  o.send({ t: 'lb', do: 'start' })
+  await until(() => o.of('welcome').length === before + 1 && !!p2.last('welcome') && q.of('welcome').length >= 3, 3000, 'the next match')
+  check(welcomeOf(o).room !== room.id && party.lobby.rooms.some((x) => x.lobby === made.id), 'start again: a room of its own for the next match')
+
+  const text = JSON.stringify(partyLogs)
+  check(!text.includes(made.code) && !text.includes('hunter22') && partyLogs.some((line) => line.msg === 'lobby created' && line.lobby === made.id), 'the logs name lobbies by id and people by user id, never an invite code or a password')
+  for (const x of [w, o, p2, q, r, s]) x.ws.close()
+}
+await party.close()
+
 // --- a page that stops reading ----------------------------------------------------------------------------
 
 // It keeps sending inputs (so it's never idle) but takes nothing in: what it
@@ -616,14 +736,16 @@ await queue.close()
 // --- a room is the practice simulation, nothing more ------------------------------------------------------
 
 // Bots only, one seed: 30 s of a room (its snapshots and state written as
-// they would be for players) against the simulation run bare.
+// they would be for players) against the simulation run bare (`steps`, or
+// until the match ends).
 function bare(kind: Mode, map: MapId, seed: number, steps: number) {
   const arena = arenaData(map)
   const world = createWorld(arena.colliders)
-  const combatants = recruits(kind, arena, seed, SKILL).map((recruit, i) => enlist(world, i, recruit))
-  const mode = MODES[kind].create({ combatants, arena, world, seed })
+  const settings = classic(kind)
+  const combatants = recruits(kind, arena, settings, seed, SKILL).map((recruit, i) => enlist(world, i, recruit))
+  const mode = MODES[kind].create({ combatants, arena, world, seed, settings })
   const sim = createSimulation({ world, arena, combatants, mode, events: createRecorder(() => 0).sim, seed })
-  for (let k = 0; k < steps; k++) {
+  for (let k = 0; k < steps && mode.outcome() === undefined; k++) {
     sim.step(PHYSICS_STEP, true)
     mode.report()
   }
@@ -641,6 +763,31 @@ for (const [kind, map] of [['ffa', 'scrapyard'], ['tdm', 'city']] as const) {
   }
   const dealt = r.combatants.reduce((sum, c) => sum + c.stats.damageDealt, 0)
   check(dealt > 0 && fingerprint(r.combatants) === bare(kind, map, 1234, 30 * 60), `${kind} on ${map}: a bots-only room ends 30 s of fighting (${Math.round(dealt)} hull dealt) exactly where the bare simulation does`)
+  r.dispose()
+}
+
+// Classic as it played before the custom lobbies (.claude/work/custom/PLAN.md
+// 5.6): a whole match of bots in each mode on each arena, hashed. The
+// refactor leaves them as they are; play changed on purpose changes them here.
+{
+  const started = performance.now()
+  const GOLDEN = [
+    ['tdm', 'scrapyard', 'd9ee9ad8fa7017af'],
+    ['tdm', 'city', '467400f8225aeea3'],
+    ['ffa', 'scrapyard', '3c2735848552d2b4'],
+    ['ffa', 'city', '6c4c3343a80b5f99'],
+  ] as const
+  const played = GOLDEN.map(([kind, map]) => createHash('sha256').update(bare(kind, map, 1234, 700 * 60)).digest('hex').slice(0, 16))
+  console.log(`classic, a whole match of bots: ${GOLDEN.map(([kind, map], i) => `${kind} ${map} ${played[i]}`).join(', ')} (${((performance.now() - started) / 1000).toFixed(1)} s)`)
+  GOLDEN.forEach(([kind, map, pinned], i) => check(played[i] === pinned, `${kind} on ${map}: a whole match of bots plays as before (${pinned}, played ${played[i]})`))
+}
+
+// One gun for everyone (a custom lobby's setting): every bot draws it, and a
+// person is fitted with it whatever their loadout says.
+{
+  const r = createRoom({ id: 'guns', mode: 'ffa', map: 'scrapyard', seed: 5, settings: { ...classic('ffa'), weapons: 'rocketPod' } })
+  const person = r.join({ uid: 'g-1', name: 'g-1', loadout: { vehicle: 'razor', weapon: 'minigun' }, send() {}, close() {} }, 0)
+  check(!!person && r.combatants.every((c) => weaponId(c.weapon.spec) === 'rocketPod'), 'one gun for everyone: the bots draw it, a person is fitted with it whatever their loadout says')
   r.dispose()
 }
 
@@ -718,6 +865,77 @@ for (const [kind, map] of [['ffa', 'scrapyard'], ['tdm', 'city']] as const) {
   console.log(`journal: ${(statSync(file.path).size / 1024).toFixed(0)} KB gzipped for ${(steps / 3600).toFixed(1)} min of a room with 1–2 people firing`)
   kept.close()
   rmSync(dir, { recursive: true, force: true })
+}
+
+// --- a custom lobby's room: its seat plan, empty seats, the end handed back ----------------------------------
+
+// Made from a lobby's plan (roster.ts SeatPlan): its people in their own
+// seats from the grid, bots only where the owner put them (each at its own
+// difficulty), the other seats out of play. Someone leaving leaves an empty
+// seat, never a bot; taking it again brings it into play at a start,
+// protected. After its results the lobby hears the match is over — no next
+// match — and a match with nobody seated for 10 s ends without a result.
+// It replays to the bit, seats and all.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'scrapyard-custom-'))
+  const kept = createRecords({ dir, days: 14, log: () => {} })
+  const created = Date.UTC(2026, 8, 30, 12)
+  const file = kept.replay('custom', created)
+  const recorded: MatchRecord[] = []
+  const ended: Array<number | null | undefined> = []
+  const plan: SeatPlan = [{ uid: 'c-1' }, { skill: 'hard' }, null, { uid: 'c-2' }, { skill: 'easy' }, ...Array.from({ length: 7 }, () => null)]
+  const settings = { ...classic('ffa'), size: 12, duration: 300, killLimit: 10 }
+  const r = createRoom({ id: 'custom', mode: 'ffa', map: 'city', seed: 31, settings, lobby: 'lob-1', plan, chat: `sy-${'c'.repeat(24)}`, results: 1, created, journal: file.write, record: (m) => (recorded.push(m), kept.match(m)), over: (winner) => void ended.push(winner) })
+  const at = (k: number) => k * 1000 * PHYSICS_STEP
+  const heard = new Map<string, ServerMessage[]>()
+  const people = new Map<string, Human>()
+  const come = (uid: string, seat: number) => {
+    const h = r.join({ uid, name: uid, loadout: { vehicle: 'razor', weapon: 'rocketPod' }, send: (data) => void heard.set(uid, [...(heard.get(uid) ?? []), readServer(data)]), close() {} }, at(r.tick), seat)
+    if (h) people.set(uid, h)
+    return h
+  }
+  const run = (steps: number) => {
+    for (let n = 0; n < steps; n++) r.step(at(r.tick + 1))
+  }
+  come('c-1', 0)
+  come('c-2', 3)
+  const welcome = heard.get('c-1')!.find((m) => m.t === 'welcome') as Welcome
+  check(!r.open() && welcome.lobby === 'lob-1' && welcome.chat.all === `sy-${'c'.repeat(24)}`, 'a custom room is never Classic’s; its welcome names the lobby, whose chat carries on into the match')
+  check(r.combatants.filter((c) => c.brain).length === 2 && r.combatants[1].brain?.skill === DIFFICULTIES.hard && r.combatants[4].brain?.skill === DIFFICULTIES.easy, 'bots only where the owner put them, each at its own difficulty')
+  check(r.combatants.filter((c) => c.present).length === 4 && welcome.lineUp.filter((s) => s.present).length === 4 && r.combatants[0].present && !r.combatants[2].present, 'the people’s seats are theirs from the grid; the empty ones are out of play')
+  check(!come('c-9', 0) && weaponId(r.combatants[0].weapon.spec) === 'rocketPod' && !r.combatants[0].brain, 'a seat a person holds takes nobody else; no bot at a person’s wheel, their own gun at once')
+  run(60 * 8)
+  r.leave(people.get('c-2')!, at(r.tick))
+  check(!r.combatants[3].present && !r.combatants[3].brain && r.combatants[3].name === '', 'someone leaves: an empty seat, never a bot')
+  run(60 * 2)
+  come('c-2', 3)
+  run(2)
+  check(r.combatants[3].present && r.combatants[3].alive && r.mode.rules.contenders[3].life === 'protected', 'back in their seat: in play at a start, protected')
+  for (let n = 0; !ended.length; n++) {
+    if (n > 60 * 400) throw new Error('server: the custom room’s match never ended')
+    run(1)
+  }
+  const [record] = recorded
+  check(ended.length === 1 && ended[0] === record.winner && record.custom?.lobby === 'lob-1' && JSON.stringify(record.custom?.settings) === JSON.stringify(settings), `the match over, results and all: the lobby hears the winner (${ended[0]}); the record says whose lobby and how it was played`)
+  const steps = r.tick
+  run(60 * 3)
+  check(ended.length === 1 && r.match === 1 && r.mode.rules.phase === 'complete', 'no next match: the room waits to be closed')
+  const final = fingerprint(r.combatants)
+  r.dispose()
+  await file.end()
+  const again = await replay(replayLines(file.path))
+  check(again.steps === steps + 60 * 3 && fingerprint(again.room.combatants) === final && JSON.stringify(again.records) === JSON.stringify(recorded), `a custom room replays to the bit: its plan, the seats taken and left (${steps} steps)`)
+  again.room.dispose()
+  kept.close()
+  rmSync(dir, { recursive: true, force: true })
+
+  const deserted: Array<number | null | undefined> = []
+  const empty = createRoom({ id: 'deserted', mode: 'tdm', map: 'city', seed: 5, settings: classic('tdm'), lobby: 'lob-2', plan: [{ uid: 'gone' }, { skill: 'normal' }, null, null, { skill: 'normal' }, null, null, null], over: (winner) => void deserted.push(winner) })
+  for (let k = 1; k <= 60 * 9; k++) empty.step(at(k))
+  check(!deserted.length, 'nobody seated: the bots play on a while...')
+  for (let k = 60 * 9 + 1; k <= 60 * 11; k++) empty.step(at(k))
+  check(deserted.length === 1 && deserted[0] === undefined, '...and after 10 s the match ends without a result (abandoned)')
+  empty.dispose()
 }
 
 // --- a newcomer's seat: the bot drives it until the page's first input ----------------------------------------

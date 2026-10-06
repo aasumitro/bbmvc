@@ -18,9 +18,10 @@ export interface Stats {
   revengeKills: number
   nemesisDeaths: number // deaths to a rival who is (or just became) your nemesis
   itemsCollected: number
+  teamKills: number // teammates wrecked (friendly fire on): shown, never scored
 }
 
-export const createStats = (): Stats => ({ kills: 0, deaths: 0, assists: 0, damageDealt: 0, damageTaken: 0, combatScore: 0, streak: 0, bestStreak: 0, multiKills: 0, revengeKills: 0, nemesisDeaths: 0, itemsCollected: 0 })
+export const createStats = (): Stats => ({ kills: 0, deaths: 0, assists: 0, damageDealt: 0, damageTaken: 0, combatScore: 0, streak: 0, bestStreak: 0, multiKills: 0, revengeKills: 0, nemesisDeaths: 0, itemsCollected: 0, teamKills: 0 })
 
 // A machine's current life as the statistics see it: the damage it has taken
 // from each rival, and its own kill chain. The modes keep one per machine.
@@ -71,10 +72,12 @@ export function createScoring(people: readonly { stats: Stats }[], tallies: read
   // life of the match (reset() zeroes it), so a mode's rules can show it.
   const feuds = Array.from({ length: n }, () => new Array<number>(n).fill(0))
 
-  // `dealt` hull, modifiers already applied, went from attacker to victim.
-  function hit(attacker: number, victim: number, dealt: number, now: number) {
+  // `dealt` hull, modifiers already applied, went from attacker to victim. A
+  // teammate's (friendly fire) is the victim's damage taken, never the
+  // shooter's damage, score or a share in an assist.
+  function hit(attacker: number, victim: number, dealt: number, now: number, teammate = false) {
     people[victim].stats.damageTaken += dealt
-    if (attacker === victim) return
+    if (attacker === victim || teammate) return
     const a = people[attacker].stats
     a.damageDealt += dealt
     a.combatScore += dealt * rules.score.damage

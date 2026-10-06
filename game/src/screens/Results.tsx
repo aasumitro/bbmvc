@@ -5,16 +5,21 @@ import type { Match } from '../game/match'
 import { MODES } from '../game/modes'
 import type { Combatant } from '../game/simulation'
 import { TEAMS } from '../game/tdm/config'
+import type { LobbyView } from '../net/protocol'
+import { Tally } from './Lobby'
 import { Menu } from './Menu'
 
 // End of a match: the result and the player's record on the left, everyone's
 // standing on the right, then Play again / Exit to garage (arrows or W A S D,
 // Enter) — online, the countdown to the room's next match and Back to
-// garage instead. Free for all gets the full record; team deathmatch the
-// team score, the MVP and both rosters. Sections rise in one after another.
+// garage instead; a custom lobby's match, the countdown back to its waiting
+// room, Back to lobby, and the lobby's tally with this result in it. Free
+// for all gets the full record; team deathmatch the team score, the MVP and
+// both rosters. Sections rise in one after another.
 
 interface ResultsProps {
   match: Match
+  lobby?: LobbyView | null // a custom lobby's match: its lobby
   onPlayAgain: () => void
   onExit: () => void
 }
@@ -42,7 +47,7 @@ const rulesOf = ({ mode }: Match) => ({ ffa: mode.kind === 'ffa' ? mode.rules : 
 
 // The headline for the player: title, tone, one line of record, the badge and a note (overtime).
 function verdict(match: Match): { tone: Tone; title: string; line: string; badge: ReactNode; badgeLabel: string; note?: string } {
-  const { player, combatants } = match
+  const { player } = match
   const { ffa, tdm } = rulesOf(match)
   const record = `${plural(player.stats.kills, 'kill')} · ${plural(player.stats.deaths, 'death')}`
   if (ffa) {
@@ -59,7 +64,7 @@ function verdict(match: Match): { tone: Tone; title: string; line: string; badge
           <span className="align-super text-[0.4em]">{suffix(place)}</span>
         </>
       ),
-      badgeLabel: `of ${combatants.length} machines`,
+      badgeLabel: `of ${ffa.standings().length} machines`, // those in play
     }
   }
   const tone: Tone = !tdm || tdm.draw ? 'draw' : tdm.winner === player.team ? 'win' : 'loss'
@@ -73,7 +78,16 @@ function verdict(match: Match): { tone: Tone; title: string; line: string; badge
   }
 }
 
-export function Results({ match, onPlayAgain, onExit }: ResultsProps) {
+// The tally's key this match's result adds a win to (server/custom.ts): the side, the winner's user id or bot slot; none for a draw.
+function winnerKey(match: Match, lobby: LobbyView) {
+  const { ffa, tdm } = rulesOf(match)
+  if (tdm) return tdm.draw ? undefined : String(tdm.winner)
+  if (!ffa || ffa.draw || ffa.winner < 0) return undefined
+  const slot = lobby.slots[ffa.winner]
+  return slot?.kind === 'person' ? slot.uid : slot?.kind === 'bot' ? `bot:${ffa.winner}` : undefined
+}
+
+export function Results({ match, lobby, onPlayAgain, onExit }: ResultsProps) {
   const { tone, title, line, badge, badgeLabel, note } = verdict(match)
   const colors = TONES[tone]
   return (
@@ -105,10 +119,20 @@ export function Results({ match, onPlayAgain, onExit }: ResultsProps) {
           <div className="flex flex-col gap-5">
             {match.mode.kind === 'tdm' && <Mvp match={match} />}
             <Record match={match} />
-            {match.online && <NextMatch match={match} />}
+            {lobby && (
+              <div className="animate-rise border border-white/10 bg-white/[0.03] px-4 py-3 motion-reduce:animate-none" style={rise(8)}>
+                <p className="text-[0.6rem] font-bold tracking-[0.3em] text-neutral-400 uppercase">Lobby tally</p>
+                <div className="mt-1">
+                  <Tally lobby={lobby} won={winnerKey(match, lobby)} />
+                </div>
+              </div>
+            )}
+            {match.online && <NextMatch match={match} what={lobby ? 'Back to the lobby' : 'Next match'} />}
             <Choices
               options={
-                match.online
+                lobby
+                  ? [{ label: 'Back to lobby', action: onExit }]
+                  : match.online
                   ? [{ label: 'Back to garage', action: onExit }]
                   : [
                       { label: 'Play again', action: onPlayAgain },
@@ -124,8 +148,8 @@ export function Results({ match, onPlayAgain, onExit }: ResultsProps) {
   )
 }
 
-// Online: the room starts its next match by itself; the seconds until it does.
-function NextMatch({ match }: { match: Match }) {
+// Online: the room starts its next match by itself (a custom lobby's goes back to its waiting room); the seconds until it does.
+function NextMatch({ match, what }: { match: Match; what: string }) {
   const [left, setLeft] = useState(() => match.nextIn())
   useEffect(() => {
     const timer = setInterval(() => setLeft(match.nextIn()), 250)
@@ -133,7 +157,7 @@ function NextMatch({ match }: { match: Match }) {
   }, [match])
   return (
     <p className="animate-rise font-display text-lg text-neutral-200 italic motion-reduce:animate-none" style={rise(8)}>
-      {left < Infinity ? `Next match in ${Math.ceil(left)} s` : 'Next match soon'}
+      {left < Infinity ? `${what} in ${Math.ceil(left)} s` : `${what} soon`}
     </p>
   )
 }
@@ -222,6 +246,7 @@ function Standings({ match }: { match: Match }) {
   const { player, combatants } = match
   const { ffa, tdm } = rulesOf(match)
   const cell = 'px-2 py-2 text-right'
+  const teamKills = !!tdm?.settings.friendlyFire // information, never a score
   const row = (c: Combatant, place: number, step: number) => (
     <tr key={c.id} className={`animate-rise border-t border-white/5 motion-reduce:animate-none ${c === player ? 'bg-red-500/10 text-red-300' : 'text-neutral-300'}`} style={rise(step)}>
       <td className="py-2 pr-2 pl-4 text-neutral-500">{place}</td>
@@ -241,6 +266,7 @@ function Standings({ match }: { match: Match }) {
       <td className={cell}>{c.stats.assists}</td>
       <td className={cell}>{number(c.stats.damageDealt)}</td>
       <td className={`${cell} pr-4`}>{number(c.stats.combatScore)}</td>
+      {teamKills && <td className={`${cell} pr-4`}>{c.stats.teamKills}</td>}
     </tr>
   )
   const teams = [player.team, 1 - player.team]
@@ -257,6 +283,7 @@ function Standings({ match }: { match: Match }) {
             <th className={`${cell} font-bold`}>A</th>
             <th className={`${cell} font-bold`}>Damage</th>
             <th className={`${cell} pr-4 font-bold`}>Score</th>
+            {teamKills && <th className={`${cell} pr-4 font-bold`}>TK</th>}
           </tr>
         </thead>
         <tbody>
@@ -266,7 +293,7 @@ function Standings({ match }: { match: Match }) {
               teams.map((team, g) => (
                 <Fragment key={team}>
                   <tr className="border-t border-white/10">
-                    <td colSpan={7} className={`px-4 pt-3 pb-1 text-[0.6rem] tracking-[0.25em] ${g ? 'text-red-400' : 'text-sky-300'}`}>
+                    <td colSpan={teamKills ? 8 : 7} className={`px-4 pt-3 pb-1 text-[0.6rem] tracking-[0.25em] ${g ? 'text-red-400' : 'text-sky-300'}`}>
                       {TEAMS[team]} · {plural(tdm.score[team], 'kill')}
                       {tdm.winner === team && <span className="ml-3 text-amber-300">Winner</span>}
                     </td>

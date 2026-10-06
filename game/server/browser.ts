@@ -46,6 +46,7 @@ export function page(link: Link, arena: Arena) {
     me: seated.player.id,
     name: (id) => (id === seated.player.id ? 'you' : seated.combatants[id].name),
     kill: ({ killer, victim }) => lines.push(`kill ${feed.name(killer)} > ${feed.name(victim)}`),
+    teamKill: (killer, victim) => lines.push(`teamkill ${feed.name(killer)} > ${feed.name(victim)}`),
     death: (victim) => lines.push(`death ${victim}`),
     phase: (phase) => lines.push(`phase ${phase}`),
     news: (text) => lines.push(text),

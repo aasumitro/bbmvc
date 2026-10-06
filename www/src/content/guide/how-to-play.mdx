@@ -13,8 +13,28 @@ description: "Start a Scrapyard match online or against bots, drive and aim, tak
    - **Practice**: you against bots. Pick their difficulty on the bots row (Easy, Normal or Hard).
 
    Every bot carries a Minigun or a Rocket Pod.
+4. Or pick **Custom**, under the modes: lobbies that people make and run themselves ([Custom lobbies](#custom-lobbies)).
 
 The Minigun is fitted by default. To take the Rocket Pod instead, open **Garage** from the main menu and switch weapon with <kbd>←</kbd> <kbd>→</kbd>; **Select** takes you on to the arena screen.
+
+## Custom lobbies
+
+**Custom**, under the modes on the arena screen, lists the public lobbies: mode, arena, players and time (a running match's time left), with a lock on those that ask for a password. Search by lobby or host name (<kbd>/</kbd>), filter by mode, arena or open slots, and **Join** (<kbd>↑</kbd> <kbd>↓</kbd>, <kbd>Enter</kbd>). An invite code, eight characters shown as `ABCD-EFGH`, goes in **Join by code**; an invite link (`/play/?join=` and the code) opens the game straight into the lobby, as a guest if you aren't signed in. A code or a link never asks for the password.
+
+**Create lobby** (<kbd>C</kbd>) makes you its owner. You choose:
+
+- its name, and who can join: **Public** (listed, with an optional password for joins from the list) or **Invite only** (not listed: the code or the link only);
+- the mode and the arena;
+- the players: 2 to 12 in Free for All, 1 v 1 to 6 v 6 in Team Deathmatch. That's the most the match takes, bots included; it can start with fewer;
+- the match length: 5, 10, 15, 20 or 30 minutes;
+- **Join in progress**: whether someone joining mid-match goes straight in or waits for the next one;
+- under **Advanced**: respawn speed (Fast halves the waits, Slow adds half), friendly fire in Team Deathmatch (teammates' rounds and rockets hurt, and a team kill costs the team a point), the pickups (Health and repair, Ammo, Power-ups: speed, armour and damage; in Team Deathmatch too), one gun for everyone, bots included, and a kill limit (10, 25 or 50 kills: the first machine, or team, to get there wins at once).
+
+The waiting room shows the slots, the match settings and the lobby chat (<kbd>T</kbd>, which goes on into the match). <kbd>Enter</kbd> readies you. In Team Deathmatch you change side by clicking an open slot. The **+** on an open slot copies the invite link, and lets the owner add a bot at Easy, Normal or Hard: there are no bots unless the owner adds them, and an empty slot stays empty. The owner can also edit the settings (everyone is unready again), reset the code (the old link stops working), make someone else the owner, or kick someone, who can't come back to that lobby.
+
+The owner starts the match (<kbd>Enter</kbd>) once there are two people and everyone else is Ready; in Team Deathmatch each side needs someone, a person or a bot. Mid-match, <kbd>Esc</kbd> and **Back to lobby** take you out of the match and back to the waiting room (so does a minute without touching the controls); **Join match** puts you back in if the lobby lets people join mid-match. 15 seconds after the results everyone is back in the waiting room, unready, and the tally counts the lobby's wins: by side in Team Deathmatch, by player in Free for All.
+
+If the connection drops or you reload the page, you're back in the lobby, and in your seat if the match is still on, as long as you're back within 20 seconds. When the owner leaves, whoever has been there longest takes over; an owner alone deletes the lobby. A lobby closes after 30 minutes waiting with nothing done in it.
 
 ## Drive
 
@@ -38,10 +58,12 @@ Your hull has 100 points, shown on the HUD with speed, ammo, a compass and a min
 | Last 2 minutes | 20 s |
 | Overtime | 5 s |
 
+A custom lobby keeps these steps at the same shares of its own match length (30, 50 and 80%), and its respawn speed scales every wait: Fast halves them, Slow adds half.
+
 After a respawn you have two seconds of protection that cuts incoming damage by 80%. In Team Deathmatch it ends the moment you fire. The game picks the start for you, away from enemy sight lines and the latest wrecks, so a camped start stops being a trap.
 
 ## Read the match
 
-Hold <kbd>Tab</kbd> for the scoreboard; it is also what you see while you wait to respawn. Online, the scoreboard marks bots **Bot**, the minimap rings the other players, the corner under the clock counts the players in the room, and the feed says when someone joins or leaves. The kill feed in the corner reports every wreck, and callouts announce streaks and multi-kills. <kbd>Esc</kbd> pauses Practice: from there you can change settings or leave, and the game asks before you abandon a match in progress. Online, <kbd>Esc</kbd> opens the match menu while the match goes on; if you leave, a bot takes your machine over.
+Hold <kbd>Tab</kbd> for the scoreboard; it is also what you see while you wait to respawn. Online, the scoreboard marks bots **Bot**, the minimap rings the other players, the corner under the clock counts the players in the room, and the feed says when someone joins or leaves. The kill feed in the corner reports every wreck, and callouts announce streaks and multi-kills. <kbd>Esc</kbd> pauses Practice: from there you can change settings or leave, and the game asks before you abandon a match in progress. Online, <kbd>Esc</kbd> opens the match menu while the match goes on; if you leave a Classic match, a bot takes your machine over (in a custom lobby your seat stays empty and you stay in the lobby).
 
-When the clock runs out you get the results: your placing, your record and the final standings. In Practice, **Play again** or go back to the garage. Online, the next match starts by itself 15 seconds later.
+When the clock runs out you get the results: your placing, your record and the final standings. In Practice, **Play again** or go back to the garage. In Classic, the next match starts by itself 15 seconds later; in a custom lobby, everyone goes back to the waiting room.

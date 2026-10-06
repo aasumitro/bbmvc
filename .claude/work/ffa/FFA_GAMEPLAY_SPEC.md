@@ -1,7 +1,9 @@
 # Free For All — gameplay spec
 
-The implementation contract for FFA. Rules: `src/game/ffa/rules.ts`,
-`items.ts`; numbers: `FFA` in `src/game/ffa/config.ts` (FFA_BALANCING.md).
+The implementation contract for FFA. Rules: `src/game/ffa/rules.ts`, with
+the pickups every mode shares in `src/game/items/` (`items.ts`,
+`supply.ts`); numbers: `FFA` in `src/game/ffa/config.ts`, the items' in
+`SUPPLY` (`src/game/items/config.ts`) (FFA_BALANCING.md).
 
 **Time.** *Elapsed* = match time since the start signal (0:00 → 10:00). The HUD
 clock shows *remaining* (10:00 → 0:00). Every timer runs on the simulation

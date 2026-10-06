@@ -74,12 +74,12 @@ export function createTactics(members: readonly Member[], view: TacticsView, nod
     return mate < 0 || distance(members[mate].position, members[i].position) > t.isolation
   }
 
-  // The team's one member with the most kills; -1 while that's tied (or nobody has one).
+  // The team's one member in play with the most kills; -1 while that's tied (or nobody has one).
   function topScorer(team: number) {
     let top = -1
     let most = 0
     for (let i = 0; i < n; i++) {
-      if (members[i].team !== team) continue
+      if (members[i].team !== team || view.contenders[i].life === 'absent') continue
       const kills = members[i].stats.kills
       if (kills > most) {
         most = kills

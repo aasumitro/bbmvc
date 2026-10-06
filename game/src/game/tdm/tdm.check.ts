@@ -3,7 +3,8 @@
 // (exact in binary, so phase boundaries land on a step), plus one run at the
 // game's own 1/60 s. Team 0 is members 0-3 (0 is the player's seat), team 1
 // members 4-7.
-import { createBrain, pickTarget, provoke, type Agent, type Plan } from '../ai.ts'
+import { clearOfMates, createBrain, pickTarget, provoke, type Agent, type Plan } from '../ai.ts'
+import { classic, type MatchSettings } from '../matchSettings.ts'
 import { createStats } from '../scoring.ts'
 import { TDM } from './config.ts'
 import { createTeamDeathmatch, multiKillTitle, type TeamDeathmatch } from './rules.ts'
@@ -31,9 +32,9 @@ const TEAM = [0, 0, 0, 0, 1, 1, 1, 1]
 const FAR: [number, number] = [999, 999]
 const { bots: B } = TDM
 
-function setup(starts = STARTS) {
-  const cars: Member[] = TEAM.map((team, i) => ({ name: `car${i}`, team, alive: true, health: 100, maxHealth: 100, position: { ...starts[i % starts.length] }, stats: createStats() }))
-  const tdm = createTeamDeathmatch(cars, { starts, homes: HOMES })
+function setup(starts = STARTS, settings: MatchSettings = classic('tdm')) {
+  const cars: Member[] = TEAM.map((team, i) => ({ name: `car${i}`, team, alive: true, health: 100, maxHealth: 100, position: { ...starts[i % starts.length] }, weapon: { ammo: 60, reload: 0, spec: { magazine: 60 } }, stats: createStats() }))
+  const tdm = createTeamDeathmatch(cars, { starts, homes: HOMES, spots: [], seed: 1, settings })
   const tactics = createTactics(cars, tdm, NODES)
   return { cars, tdm, tactics, starts }
 }
@@ -468,6 +469,76 @@ function spawnFor(who: number, at: Record<number, [number, number]>, sees: (enem
   set(6, 500.5, 0, 0, 9)
   check(tdm.standings()[0] === 6, 'combat score comes first')
 }
+{
+  // An empty seat (a custom room's): out of play quietly, left out of the
+  // standings and of spawn choice; taken, due back at once.
+  const match = setup()
+  const { cars, tdm } = match
+  advanceTo(match, 10)
+  Object.assign(cars[6].stats, { combatScore: 900 })
+  check(tdm.leave(6) && tdm.contenders[6].life === 'absent' && cars[6].stats.deaths === 0 && !drain(tdm).some((e) => e.type === 'kill' || e.type === 'death'), 'an empty seat leaves quietly')
+  check(!tdm.standings().includes(6) && tdm.standings().length === 7 && !tdm.respawnDue(6), 'out of the standings, never due back by itself')
+  for (const car of cars) Object.assign(car, { alive: false, position: { x: FAR[0], z: FAR[1] } })
+  place(cars, { 6: [STARTS[0].x, STARTS[0].z] }) // on team 0's best start
+  check(tdm.pickSpawn(0, () => false) === 0, 'where it stands blocks no start')
+  check(tdm.enter(6) && tdm.contenders[6].life === 'pending' && tdm.respawnDue(6), 'taken: due back at once')
+}
+
+// --- friendly fire, team kills, a custom lobby's settings ---------------------------------------
+const friendly = { ...classic('tdm'), friendlyFire: true }
+{
+  // On: a teammate's hit hurts — the victim's damage taken, never the shooter's damage, score or assist.
+  const match = setup(STARTS, friendly)
+  const { cars, tdm } = match
+  advanceTo(match, 10)
+  check(tdm.damage(1, 1, 20) === 0, 'never your own machine, friendly fire or not')
+  near(hit(match, 1, 2, 30), 30, 'friendly fire on: a teammate takes the hit')
+  check(cars[2].stats.damageTaken === 30 && cars[1].stats.damageDealt === 0 && cars[1].stats.combatScore === 0 && tdm.contenders[2].hitDamage[1] === 0, 'the victim’s damage taken; never the shooter’s damage, score or share in an assist')
+  const before = { ...cars[1].stats }
+  drain(tdm)
+  wreck(match, 1, 2)
+  const events = drain(tdm)
+  check(tdm.score.join() === '-1,0', 'a team kill takes a point off the killer’s team, below zero if need be')
+  check(cars[1].stats.kills === before.kills && cars[1].stats.deaths === before.deaths && cars[1].stats.combatScore === before.combatScore && cars[1].stats.teamKills === 1, 'no personal penalty: kills, deaths and score as they were, the team kill counted apart')
+  check(cars[2].stats.deaths === 1 && events.some((e) => e.type === 'teamkill' && e.killer === 1 && e.victim === 2 && e.team === 0), 'the victim’s death counts; the feed hears of it')
+}
+{
+  // A team kill in overtime separates the scores: the other team wins.
+  const match = setup(STARTS, friendly)
+  const { tdm } = match
+  advanceTo(match, TDM.duration)
+  check(tdm.phase === 'overtime', '0 : 0 at the buzzer: overtime')
+  wreck(match, 1, 2)
+  check(tdm.phase === 'complete' && tdm.winner === 1 && tdm.score.join() === '-1,0', 'a team kill in overtime hands the match to the other team')
+}
+{
+  // Kill limit: the first team to it wins at once; a slow respawn waits half as long again.
+  const match = setup(STARTS, { ...classic('tdm'), killLimit: 2, respawn: 'slow' })
+  const { tdm } = match
+  advanceTo(match, 10)
+  wreck(match, 1, 4)
+  near(tdm.contenders[4].respawnAt - tdm.now, 7.5, 'slow: the first band’s 5 s half as long again')
+  check(tdm.phase === 'active', 'one short of the limit: the match runs on')
+  wreck(match, 2, 5)
+  check(tdm.phase === 'complete' && tdm.winner === 0, 'the first team to the kill limit wins at once')
+}
+{
+  // Friendly fire on, a bot holds its trigger with a teammate near its line of fire, or near where its rocket would burst.
+  const fake = (id: number, team: number, x: number, z: number, rocket = false) =>
+    ({ id, team, alive: true, position: { x, y: 0, z }, control: { aim: { x: 0, y: 1, z: 40 } }, weapon: { spec: { rocket: rocket ? { blast: 8 } : undefined } } }) as unknown as Agent
+  const bot = fake(1, 0, 0, 0)
+  const mate = fake(2, 0, 2, 20)
+  const enemy = fake(5, 1, 0, 40)
+  check(!clearOfMates(bot, [bot, mate, enemy]), 'a teammate 2 m off the line of fire: hold')
+  mate.position.x = 5
+  check(clearOfMates(bot, [bot, mate, enemy]), 'five metres off: clear')
+  mate.alive = false
+  mate.position.x = 0
+  check(clearOfMates(bot, [bot, mate, enemy]), 'a wreck in the way: clear (it takes no damage)')
+  const pod = fake(3, 0, 0, 0, true)
+  const nearTarget = fake(4, 0, 6, 44)
+  check(!clearOfMates(pod, [pod, nearTarget, enemy]) && clearOfMates(bot, [bot, nearTarget, enemy]), 'a teammate inside the blast at the aim: the rocket holds, the gun fires')
+}
 
 // --- team AI -----------------------------------------------------------------------------------
 {
@@ -557,7 +628,7 @@ function spawnFor(who: number, at: Record<number, [number, number]>, sees: (enem
   wreck(match, 1, 4)
   hit(match, 5, 2, 50)
   advanceTo(match, TDM.duration)
-  tdm.reset()
+  tdm.reset(2)
   check(tdm.phase === 'preMatch' && tdm.now === 0 && tdm.score.join() === '0,0' && tdm.events.length === 0 && tdm.winner === -1 && tdm.mvp === -1 && tdm.overtimeAt === -1, 'restart starts over')
   check(cars.every((c) => c.stats.kills === 0 && c.stats.combatScore === 0) && tdm.contenders.every((c) => c.life === 'alive' && c.hitDamage.every((d) => d === 0)), 'restart clears statistics, lives and attribution')
 }

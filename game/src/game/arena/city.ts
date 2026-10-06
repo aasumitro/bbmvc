@@ -89,7 +89,8 @@ export function buildCity(seed = 7): Arena {
 
   // --- starts ----------------------------------------------------------------
   // Free-for-all starts on the perimeter road, facing along it; the crews'
-  // bases hold the two ends of Main Avenue.
+  // bases hold the two ends of Main Avenue, three rows of two (a crew of
+  // four starts on the two outer rows).
   const spawns: SpawnPoint[] = []
   for (const along of [-83, -28, 28, 83]) {
     const inward = along < 0 ? 1 : -1
@@ -111,6 +112,8 @@ export function buildCity(seed = 7): Arena {
       [5, 100],
       [-5, 88],
       [5, 88],
+      [-5, 76],
+      [5, 76],
     ]) {
       bases[team].push({ position: new THREE.Vector3(x, 0, side * back), heading: side < 0 ? 0 : Math.PI })
     }

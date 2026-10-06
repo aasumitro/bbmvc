@@ -1,11 +1,14 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { DIFFICULTIES, type Difficulty } from '../game/ai'
 import { MENU_BACKDROP } from '../game/loading'
+import type { Loadout } from '../game/loadout'
 import { MAPS, mapsFor, type MapId } from '../game/maps'
 import { MODES, type Mode } from '../game/modes'
 import { cancelSearch } from '../net/matchmaking'
-import { ActionButton, Menu, Pager, type MenuItem } from './Menu'
-import { useClock, useSearch, waited } from './search'
+import { Robot } from './Avatar'
+import { Custom } from './Custom'
+import { ActionButton, Menu, Pager, Segmented, type MenuItem } from './Menu'
+import { useClock, useCustom, useSearch, waited } from './search'
 
 export interface Pick {
   mode: Mode
@@ -16,13 +19,15 @@ export interface Pick {
 
 interface MapSelectProps {
   pick: Pick // the last choice, shown first
+  loadout: Loadout // a custom lobby's seat is fitted with it
   onStart: (pick: Pick) => void // practice against bots, or Find Match (Classic)
   onBack: () => void
 }
 
 const MODE_IDS = Object.keys(MODES) as Mode[]
 const DIFFICULTY_IDS = Object.keys(DIFFICULTIES) as Difficulty[]
-const NAV_ITEMS: MenuItem[] = [...MODE_IDS.map((mode) => ({ label: MODES[mode].label })), { label: 'Custom', hint: 'coming soon', disabled: true }, { label: 'Back' }]
+const NAV_ITEMS: MenuItem[] = [...MODE_IDS.map((mode) => ({ label: MODES[mode].label })), { label: 'Custom' }, { label: 'Back' }]
+const CUSTOM = MODE_IDS.length
 const BACK = NAV_ITEMS.length - 1
 // the entry ↑ (-1) or ↓ (1) lands on, round the ends, over the disabled ones
 function step(from: number, by: number) {
@@ -37,15 +42,6 @@ const keycap = 'rounded border border-neutral-500/50 px-1.5 py-0.5'
 // beside the choice the keys are on, as the menus mark theirs
 const mark = <span className="absolute top-1/2 -left-5 h-7 w-0.5 -translate-y-1/2 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]" />
 
-const robot = (
-  <svg viewBox="0 0 32 32" className="h-8 w-8 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M16 4v4M12 4h8" />
-    <rect x="7" y="8" width="18" height="12" rx="3" />
-    <circle cx="12.5" cy="14" r="1.2" fill="currentColor" />
-    <circle cx="19.5" cy="14" r="1.2" fill="currentColor" />
-    <path d="M4 12v4M28 12v4M11 20v3h10v-3M13 23v5M19 23v5M9 28h14" />
-  </svg>
-)
 const globe = (
   <svg viewBox="0 0 32 32" className="h-8 w-8 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
     <circle cx="16" cy="16" r="12" />
@@ -54,7 +50,9 @@ const globe = (
   </svg>
 )
 
-// Modes on the left (and Custom, coming soon). On the right, while a mode is
+// Modes on the left, then Custom (custom lobbies: Custom.tsx, which takes
+// the keys once opened, and opens by itself while the player is in a
+// lobby). On the right, while a mode is
 // highlighted: the arena, how good the practice bots are, then how to play
 // it — Practice against bots, or Classic: Find Match, and the game server
 // finds people to play this mode on this arena with (net/matchmaking.ts),
@@ -66,14 +64,16 @@ const globe = (
 // arena, the bots and Practice / Classic, ←→ change the one chosen, Enter
 // goes down a row and on the last starts the match; Esc (or ↑ from the
 // arena) goes back to the modes. The mouse works too.
-export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
-  const [selected, setSelected] = useState(MODE_IDS.indexOf(pick.mode))
+export function MapSelect({ pick, loadout, onStart, onBack }: MapSelectProps) {
+  const customStore = useCustom()
+  const lobby = customStore.phase !== 'off' // in a custom lobby: its waiting room first, or coming back/joining, and no Classic search
+  const [selected, setSelected] = useState(lobby ? CUSTOM : MODE_IDS.indexOf(pick.mode))
   // the arena chosen for each mode, starting from the last pick where it hosts that mode
   const [difficulty, setDifficulty] = useState(pick.difficulty)
   const [online, setOnline] = useState(pick.online) // what Enter starts: Classic, or Practice
-  const [row, setRow] = useState(-1) // the choice the keys change: -1 the mode list, else a ROWS index
+  const [row, setRow] = useState(lobby ? 0 : -1) // the choice the keys change: -1 the mode list, else a ROWS index (Custom: its own)
   const [maps, setMaps] = useState(() => Object.fromEntries(MODE_IDS.map((mode) => [mode, mapsFor(mode).includes(pick.map) ? pick.map : mapsFor(mode)[0]])) as Record<Mode, MapId>)
-  const mode = MODE_IDS[selected] ?? MODE_IDS[0] // on Back the right side is empty: any mode will do
+  const mode = MODE_IDS[selected] ?? MODE_IDS[0] // on Custom and Back the mode's side isn't shown: any mode will do
   const { label, tags, blurb } = MODES[mode]
   const map = maps[mode]
   const choices = mapsFor(mode)
@@ -86,7 +86,7 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
   function classic() {
     setOnline(true)
     if (searching) cancelSearch()
-    else if (search.phase === 'idle') onStart({ mode, map, difficulty, online: true })
+    else if (search.phase === 'idle' && !lobby) onStart({ mode, map, difficulty, online: true })
   }
   const cycle = (step: number) => setMaps({ ...maps, [mode]: choices[(place + step + choices.length) % choices.length] })
   const bots = (step: number) => setDifficulty(DIFFICULTY_IDS[(DIFFICULTY_IDS.indexOf(difficulty) + step + DIFFICULTY_IDS.length) % DIFFICULTY_IDS.length])
@@ -120,6 +120,7 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
       if (key === 'Escape') setRow(-1)
     }
     function onKeyDown(e: KeyboardEvent) {
+      if (selected === CUSTOM && row >= 0) return // Custom's keys
       if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(e.key)) return
       e.preventDefault() // no second press through a focused button, no page scroll
       if (row < 0) onModes(e.key)
@@ -141,7 +142,13 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
 
       <Menu items={NAV_ITEMS} selected={selected} onSelect={setSelected} onActivate={(i) => (i === BACK ? onBack() : (setSelected(i), setRow(0)))} className="absolute top-44 left-[6vw]" />
 
-      {selected !== BACK && (
+      {selected === CUSTOM && (
+        // no fade in: its transform would hold Custom's drawer and dialogs inside the panel
+        <div onPointerDown={() => setRow(0)} className="absolute top-8 right-[4vw] bottom-20 w-[min(64vw,1080px)]">
+          <Custom loadout={loadout} active={row >= 0} onBack={() => setRow(-1)} />
+        </div>
+      )}
+      {selected < CUSTOM && (
         <div className="absolute top-1/2 right-[5vw] w-[min(55vw,900px)] -translate-y-1/2 animate-fade motion-reduce:animate-none">
           {/* the arena: its preview fades in on a change; which one of how many above its name, one pager for both ways */}
           <div className="relative">
@@ -163,26 +170,12 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
           <div className={`relative mt-4 flex items-center gap-4 transition-opacity ${online && focus !== 'bots' ? 'opacity-50' : ''}`}>
             {focus === 'bots' && mark}
             <span className="text-[0.65rem] font-bold tracking-[0.3em] text-neutral-300 uppercase">Practice bots</span>
-            <div role="radiogroup" aria-label="Practice bot difficulty" className={`flex overflow-hidden rounded-md border bg-black/45 backdrop-blur-md ${focus === 'bots' ? 'border-red-500' : 'border-white/15'}`}>
-              {DIFFICULTY_IDS.map((id, i) => (
-                <Fragment key={id}>
-                  {i > 0 && <span className="w-px bg-white/15" />}
-                  <button
-                    role="radio"
-                    aria-checked={id === difficulty}
-                    onClick={() => setDifficulty(id)}
-                    className={`px-4 py-1.5 text-xs font-bold tracking-[0.2em] uppercase ${id === difficulty ? 'bg-red-500/30 text-white' : 'text-neutral-400 hover:text-white'}`}
-                  >
-                    {DIFFICULTIES[id].label}
-                  </button>
-                </Fragment>
-              ))}
-            </div>
+            <Segmented label="Practice bot difficulty" options={DIFFICULTY_IDS.map((id) => ({ id, label: DIFFICULTIES[id].label }))} value={difficulty} onChange={setDifficulty} focused={focus === 'bots'} />
           </div>
 
           <div className="relative mt-4 grid grid-cols-2 gap-4">
             {focus === 'play' && mark}
-            <ActionButton primary={!online} icon={robot} title="Practice" line={`Play with ${DIFFICULTIES[difficulty].label} Bots${searching ? ' while you wait' : ''}`} onClick={practice} />
+            <ActionButton primary={!online} icon={<Robot />} title="Practice" line={`Play with ${DIFFICULTIES[difficulty].label} Bots${searching ? ' while you wait' : ''}`} onClick={practice} />
             <ActionButton
               primary={online}
               icon={globe}
@@ -192,12 +185,14 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
                   ? 'Connecting…'
                   : search.phase === 'searching'
                     ? `${search.away ? 'Reconnecting…' : `Finding players · ${waited(Math.max(0, now - search.since))}`}${search.mode !== mode || search.map !== map ? ` · ${MODES[search.mode as Mode]?.label ?? search.mode} · ${MAPS[search.map as MapId]?.name ?? search.map}` : ''}`
-                    : search.phase === 'idle'
-                      ? 'Find Match · Online'
-                      : 'Match found'
+                    : search.phase !== 'idle'
+                      ? 'Match found'
+                      : lobby
+                        ? 'You’re in a custom lobby'
+                        : 'Find Match · Online'
               }
               note="Find people to play this mode on this arena online: bots on Normal take the seats nobody has. Practise while you wait"
-              onClick={search.phase === 'idle' || searching ? classic : undefined}
+              onClick={(search.phase === 'idle' && !lobby) || searching ? classic : undefined}
             />
           </div>
 
@@ -214,7 +209,7 @@ export function MapSelect({ pick, onStart, onBack }: MapSelectProps) {
         </div>
       )}
 
-      <div className="absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-[0.1em] text-neutral-400 uppercase">
+      <div className={`absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-[0.1em] text-neutral-400 uppercase ${selected === CUSTOM && row >= 0 ? 'hidden' : ''}`}>
         {row < 0 ? (
           <>
             <span className={keycap}>&uarr;&darr;</span>

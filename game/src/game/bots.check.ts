@@ -8,6 +8,7 @@ import type { Arena, ArenaCollider, SpawnPoint } from './arena/arena.ts'
 import { armBot, DIFFICULTIES, leadTarget, type Agent, type Difficulty } from './ai.ts'
 import { WEAPONS } from './combat.ts'
 import { createFfaMode, lineUp } from './ffa/mode.ts'
+import { classic } from './matchSettings.ts'
 import { createWorld, initPhysics, PHYSICS_STEP } from './physics.ts'
 import { createRng } from './rng.ts'
 import { createSimulation, enlist } from './simulation.ts'
@@ -66,8 +67,9 @@ function playYard(seed: number, seconds: number, difficulty: Difficulty) {
   const world = createWorld(arena.colliders)
   const skill = DIFFICULTIES[difficulty]
   const arsenal = createRng(seed ^ 0x2545f491)
-  const combatants = lineUp(arena).map(({ team, spawn }, id) => enlist(world, id, { name: `bot${id}`, team, seed: id + 1, spawn, vehicle: 'razor', weapon: armBot(skill, arsenal), bot: true, skill }))
-  const mode = createFfaMode(combatants, arena, world, seed)
+  const settings = classic('ffa')
+  const combatants = lineUp(arena, settings.size).map(({ team, spawn }, id) => enlist(world, id, { name: `bot${id}`, team, seed: id + 1, spawn, vehicle: 'razor', weapon: armBot(skill, arsenal), bot: true, skill }))
+  const mode = createFfaMode(combatants, arena, world, seed, settings)
   const noop = () => {}
   const sim = createSimulation({ world, arena, combatants, mode, seed, events: { fired: noop, shot: noop, rocket: noop, burst: noop, hurt: noop, wrecked: noop, crashed: noop, reloading: noop, respawned: noop, recovered: noop } })
   const n = { alive: 0, stuck: 0, stuckLong: 0, parked: 0, reverses: 0, distance: 0, engaged: 0, cover: 0, lurking: 0, ambushes: 0, surprise: 0 }

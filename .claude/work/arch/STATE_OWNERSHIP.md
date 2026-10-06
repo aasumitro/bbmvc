@@ -11,7 +11,7 @@ in the DOM or in meshes.
 | match clock, rules phase (preMatch → complete) | the mode's rules (`ffa/rules.ts`, `tdm/rules.ts`) | HUD clock, banner, countdown |
 | lives, protection, respawn times, FFA effects | `rules.contenders[]` | HUD chips, markers, scoreboard |
 | kills, deaths, assists, streaks, scores | the rules, via `scoring.ts`, in `Combatant.stats` | HUD, results |
-| team score, MVP (TDM); items, hot zone, standings, seed (FFA) | the mode's rules | HUD, minimap, `ffa/pickups.ts`, results |
+| team score, MVP (TDM); hot zone, standings, seed (FFA); items and effects (the supply, `MatchMode.supply`) | the mode's rules | HUD, minimap, `items/pickups.ts`, `ffa/zone.ts`, results |
 | result | `MatchMode.outcome()` → `match.winner` | results |
 | hull, alive, deadFor | `Combatant` (`simulation.ts`; damage amount from `rules.damage`) | HUD, markers, view (smoke, wrecks) |
 | vehicle pose and velocity | Rapier body; copied once per step into `Combatant.position/rotation/velocity/speed` (`last` keeps the step before) | `view.ts` models, interpolated |
@@ -61,7 +61,7 @@ and the runtime's composer. No gameplay rule reads a setting.
 | Rapier world, bodies, colliders | `createWorld` + `enlist` (match) | `match.dispose` → `world.free()` |
 | vehicle geometries, muzzle light | `view.ts` (per combatant) | `view.dispose` → `disposeGeometries` |
 | particle pools, blast light | `effects.ts` (view) | `view.dispose` |
-| pickups and hot-zone meshes | `ffa/pickups.ts` (handed to the FFA adapter) | `mode.dispose` |
+| pickups and hot-zone meshes | `items/pickups.ts`, `ffa/zone.ts` (handed to the adapter) | `mode.dispose` |
 | engine and loop voices | `view.ts` | `view.dispose` (every voice stopped) |
 | input listeners, pointer lock | `input.ts` (pilot) | `pilot.dispose` |
 | settings listener | `startGame` | its teardown |

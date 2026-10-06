@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 
 interface DrawerProps {
   kicker: string
@@ -13,22 +13,23 @@ const CLOSE_DURATION_MS = 300
 export function Drawer({ kicker, title, onClose, children, footer }: DrawerProps) {
   const [open, setOpen] = useState(false)
 
-  function close() {
+  const close = useCallback(() => {
     setOpen(false)
     setTimeout(onClose, CLOSE_DURATION_MS)
-  }
+  }, [onClose])
 
+  // Slides in once: a parent's re-render (a new onClose) mustn't slide a closing drawer back.
   useEffect(() => {
     const raf = requestAnimationFrame(() => setOpen(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') close()
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => {
-      cancelAnimationFrame(raf)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [])
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [close])
 
   return (
     <div className="fixed inset-0 z-10">

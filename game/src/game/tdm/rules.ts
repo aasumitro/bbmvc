@@ -1,6 +1,12 @@
+import { SUPPLY } from '../items/config.ts'
+import { itemTypes } from '../items/items.ts'
+import { createSupply, type Supply } from '../items/supply.ts'
+import { respawnWait } from '../matchSettings.ts'
+import { LIVES, type Life } from '../mode.ts'
+import { createRng } from '../rng.ts'
 import { chainTitle, createScoring, createStats, createTally, forget } from '../scoring.ts'
 import { TDM } from './config.ts'
-import type { Contender, Life, Member, Point, TdmEvent, TdmOptions, TdmPhase } from './types.ts'
+import type { Contender, Member, Point, TdmEvent, TdmOptions, TdmPhase } from './types.ts'
 
 // Team deathmatch rules: the match clock and its states, every machine's life
 // cycle (wreck, wait, respawn, protection), team-aware spawn choice, kills and
@@ -8,7 +14,9 @@ import type { Contender, Life, Member, Point, TdmEvent, TdmOptions, TdmPhase } f
 // for all) and the MVP. Pure: no rendering, physics or DOM — the match feeds
 // it damage, wrecks, shots fired, positions and fixed steps, and reads back
 // events. That keeps it portable to an authoritative server later. Contract:
-// work/tdm/TDM_GAMEPLAY_SPEC.md. The bots' side of it is tactics.ts.
+// work/tdm/TDM_GAMEPLAY_SPEC.md. The bots' side of it is tactics.ts. When a
+// match's settings turn pickups on, the supply (../items/supply.ts) plugs in:
+// waves on the match clock, no hot zones.
 
 // Allowed moves (work/tdm/TDM_STATE_MACHINE.md); anything else is refused.
 const PHASES: Record<TdmPhase, readonly TdmPhase[]> = {
@@ -17,27 +25,26 @@ const PHASES: Record<TdmPhase, readonly TdmPhase[]> = {
   overtime: ['complete'],
   complete: [],
 }
-const LIVES: Record<Life, readonly Life[]> = {
-  alive: ['destroyed'],
-  protected: ['alive', 'destroyed'],
-  destroyed: ['pending'],
-  pending: ['respawning', 'destroyed'], // back to destroyed: cancelled by the end of the match
-  respawning: ['protected'],
-}
 
 export type TeamDeathmatch = ReturnType<typeof createTeamDeathmatch>
 
 export const multiKillTitle = (chain: number) => chainTitle(chain, TDM.multiKill.titles)
 export const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.z - b.z)
 
-export function createTeamDeathmatch(members: readonly Member[], { starts, homes }: TdmOptions) {
+export function createTeamDeathmatch(members: readonly Member[], { starts, homes, spots, seed, settings }: TdmOptions) {
   const n = members.length
   const contender = (): Contender => ({ life: 'alive', respawnAt: 0, protectedUntil: 0, spawn: -1, spawnedAt: TDM.preMatch, ...createTally(n), errand: { x: 0, z: 0, urgent: false } })
   const lastUsed = starts.map(() => -Infinity) // per start
   const wrecks: Array<Point & { at: number }> = [] // recent wrecks, oldest first: spawn pressure
   let announced = false // the final minute
+  let random = createRng(seed)
+  const types = itemTypes(settings.items)
+  const supply: Supply | undefined = types.length
+    ? createSupply(members, { spots, types, clock: (): number => tdm.now, random: () => random(), report: (event): void => void tdm.events.push(event), points: TDM.score.item, wave: () => ({ count: SUPPLY.perWave }) })
+    : undefined
 
   const tdm = {
+    settings, // how this match is played (friendly fire: the HUD shows team kills)
     phase: 'preMatch' as TdmPhase,
     now: 0, // match clock, pre-match included
     overtimeAt: -1, // when overtime began; -1: no overtime
@@ -46,6 +53,7 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
     mvp: -1, // member with the best combat score, fixed at the end
     score: [0, 0] as [number, number], // team kills: the only thing that decides the match
     contenders: members.map(contender),
+    supply, // the pickups, when the settings turn them on
     events: [] as TdmEvent[], // the match drains these every step
     elapsed,
     remaining,
@@ -57,6 +65,8 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
     respawnDue,
     pickSpawn,
     respawned,
+    leave,
+    enter,
     standings,
     deficit,
     reset,
@@ -66,10 +76,10 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
   // --- clock and states --------------------------------------------------------
 
   function elapsed() {
-    return Math.min(Math.max(tdm.now - TDM.preMatch, 0), TDM.duration)
+    return Math.min(Math.max(tdm.now - TDM.preMatch, 0), settings.duration)
   }
   function remaining() {
-    return TDM.duration - elapsed()
+    return settings.duration - elapsed()
   }
   function overtimeElapsed() {
     return tdm.overtimeAt < 0 ? 0 : tdm.now - tdm.overtimeAt
@@ -110,6 +120,7 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
     if (over()) return
     for (const c of tdm.contenders) if (c.life === 'protected' && tdm.now >= c.protectedUntil) move(c, 'alive')
     while (wrecks.length && tdm.now - wrecks[0].at > TDM.spawn.pressureMemory) wrecks.shift()
+    supply?.tick(dt, elapsed(), tdm.phase !== 'overtime') // no wave in overtime
   }
 
   // The clock hit 00:00: more kills takes it, a tie goes to overtime. Waits
@@ -119,7 +130,7 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
     if (blue !== red) return complete(blue > red ? 0 : 1)
     if (!setPhase('overtime')) return
     tdm.overtimeAt = tdm.now
-    for (const c of tdm.contenders) if (c.life === 'pending') c.respawnAt = Math.min(c.respawnAt, tdm.now + TDM.respawn.overtime)
+    for (const c of tdm.contenders) if (c.life === 'pending') c.respawnAt = Math.min(c.respawnAt, tdm.now + respawnWait(TDM.respawn, settings, elapsed(), true))
   }
 
   // Ends the match (winner -1: a draw), fixes the MVP (none while nobody has
@@ -136,31 +147,34 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
       c.chain = 0
       forget(c)
     }
+    supply?.end()
     wrecks.length = 0
-    const best = standings()[0]
-    tdm.mvp = members[best].stats.combatScore > 0 ? best : -1
+    const best = standings()[0] // undefined: every seat empty
+    tdm.mvp = best !== undefined && members[best].stats.combatScore > 0 ? best : -1
   }
 
   // --- combat -------------------------------------------------------------------
 
   // Hull a hit actually takes (0: none). Nothing before GO or after the end,
-  // nothing between teammates or from a wreck (no posthumous kills); spawn
-  // protection cuts it. Recorded for assists and the statistics; the match
-  // subtracts it.
+  // nothing to itself, between teammates (unless friendly fire is on) or
+  // from a wreck (no posthumous kills); spawn protection cuts it. Recorded
+  // for assists and the statistics; the match subtracts it.
   function damage(attacker: number, victim: number, amount: number) {
     const a = members[attacker]
     const v = members[victim]
-    if (!fighting() || !a.alive || !v.alive || a.team === v.team || !(amount > 0)) return 0
+    const teammate = a.team === v.team
+    if (!fighting() || attacker === victim || !a.alive || !v.alive || (teammate && !settings.friendlyFire) || !(amount > 0)) return 0
     const c = tdm.contenders[victim]
     const shield = c.life === 'protected' && tdm.now < c.protectedUntil ? TDM.protection.reduction : 0
-    const dealt = Math.min(v.health, amount * (1 - shield))
+    const dealt = supply ? Math.min(v.health, amount * supply.damageFactor(attacker) * (1 - Math.max(shield, supply.shield(victim)))) : Math.min(v.health, amount * (1 - shield)) // pickups: a damage boost, armor (the stronger of it and protection)
     if (dealt <= 0) return 0
-    scoring.hit(attacker, victim, dealt, tdm.now)
+    scoring.hit(attacker, victim, dealt, tdm.now, teammate)
     return dealt
   }
 
   // The victim's hull reached 0 and the match has wrecked it; `killer` landed
-  // the hit (-1: nobody). Scores it — a team kill only for a live enemy —
+  // the hit (-1: nobody). Scores it — a kill for a live enemy; a live
+  // teammate's (friendly fire) costs its team a point and nothing else —
   // then schedules the respawn, or in overtime ends the match. False if the
   // victim was already down.
   function kill(victim: number, killer: number) {
@@ -170,16 +184,22 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
     const v = members[victim]
     const ended = scoring.death(victim)
     c.protectedUntil = 0
+    supply?.clear(victim)
     wrecks.push({ x: v.position.x, z: v.position.z, at: tdm.now })
     const k = killer >= 0 ? members[killer] : null
     if (k && k.alive && k.team !== v.team) {
       tdm.score[k.team]++
       tdm.events.push({ type: 'kill', team: k.team, ...scoring.credit(killer, victim, ended, tdm.now) })
+    } else if (settings.friendlyFire && k && k.alive && killer !== victim) {
+      tdm.score[k.team]-- // may go below zero
+      k.stats.teamKills++
+      tdm.events.push({ type: 'teamkill', killer, victim, team: k.team })
     } else tdm.events.push({ type: 'death', victim })
     forget(c)
     if (tdm.phase === 'overtime' && tdm.score[0] !== tdm.score[1]) complete(tdm.score[0] > tdm.score[1] ? 0 : 1)
+    if (settings.killLimit > 0 && k && k.team !== v.team && tdm.score[k.team] >= settings.killLimit) complete(k.team) // first team to the limit
     if (over()) return true
-    c.respawnAt = tdm.now + (tdm.phase === 'overtime' ? TDM.respawn.overtime : TDM.respawn.phases.find((phase) => elapsed() < phase.before)!.delay)
+    c.respawnAt = tdm.now + respawnWait(TDM.respawn, settings, elapsed(), tdm.phase === 'overtime')
     move(c, 'pending')
     return true
   }
@@ -216,6 +236,28 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
     return true
   }
 
+  // The seat is empty (a custom room's: its person left): out of play where
+  // it stands, quietly — no death, no kill; its wait, protection and this
+  // life's hits forgotten. Left out of spawn choice and the standings until
+  // someone takes the seat.
+  function leave(i: number) {
+    const c = tdm.contenders[i]
+    if (!move(c, 'absent')) return false
+    c.respawnAt = c.protectedUntil = 0
+    forget(c)
+    return true
+  }
+
+  // Someone takes the empty seat: due back in at once (the match respawns it).
+  function enter(i: number) {
+    const c = tdm.contenders[i]
+    if (!move(c, 'pending')) return false
+    c.respawnAt = tdm.now
+    return true
+  }
+
+  const absent = (i: number) => tdm.contenders[i].life === 'absent'
+
   // The best start for `who` (see the spec's spawn selection). `sees(enemy,
   // at)`: a clear line from that enemy to the start. Starts with a machine on
   // them (wrecks included) or a live enemy in ramming range are passed over,
@@ -240,7 +282,7 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
   function blocked(who: number, at: Point) {
     const team = members[who].team
     for (let i = 0; i < n; i++) {
-      if (i === who) continue
+      if (i === who || absent(i)) continue
       const m = members[i]
       const d = distance(m.position, at)
       if (d < TDM.spawn.occupied || (m.alive && m.team !== team && d < TDM.spawn.ramRange)) return true
@@ -300,9 +342,9 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
     return sb.combatScore - sa.combatScore || sb.kills - sa.kills || sb.assists - sa.assists || sa.deaths - sb.deaths || a - b
   }
 
-  // Every member, best first (the MVP order).
+  // Every member in play, best first (the MVP order).
   function standings() {
-    return members.map((_, i) => i).sort(byRank)
+    return members.map((_, i) => i).filter((i) => !absent(i)).sort(byRank)
   }
 
   // Kills `team` is behind by (negative: ahead).
@@ -313,8 +355,11 @@ export function createTeamDeathmatch(members: readonly Member[], { starts, homes
   // --- restart ------------------------------------------------------------------
 
   // A fresh match on the same members: clock, states, score, statistics,
-  // relationships and spawn history all start over.
-  function reset() {
+  // relationships, spawn history and items all start over; the items'
+  // rolls from `next`, the new match's seed.
+  function reset(next: number) {
+    random = createRng(next)
+    supply?.reset()
     scoring.reset()
     tdm.phase = 'preMatch'
     tdm.now = 0

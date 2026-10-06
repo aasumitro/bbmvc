@@ -12,16 +12,18 @@ import { VEHICLES } from '../src/game/vehicle/vehicles'
 // and every other machine's chassis boxes at that tick (a ray against
 // oriented boxes, plain maths), the nearest hit taking it. A machine that was
 // a wreck then, or has died since, still stops the round but takes no hit:
-// that life is over, and the one it lives now is somewhere else. Rockets fly
-// in the present and are never rewound.
+// that life is over, and the one it lives now is somewhere else. An empty
+// seat's machine (out of play then) stops nothing. Rockets fly in the
+// present and are never rewound.
 
 const SPAN = 60 // ticks of poses kept (a second)
+const ABSENT = -2 // a life: out of play
 
 export type Rewind = ReturnType<typeof createRewind>
 
 export function createRewind(world: RAPIER.World, combatants: readonly Combatant[]) {
   const poses = new Float64Array(SPAN * combatants.length * 7) // per tick and machine: position, rotation
-  const lives = new Int32Array(SPAN * combatants.length) // per tick and machine: its life (deaths so far), -1 a wreck
+  const lives = new Int32Array(SPAN * combatants.length) // per tick and machine: its life (deaths so far), -1 a wreck, ABSENT out of play
   const deaths = new Int32Array(combatants.length) // each machine's, so far
   const alive = combatants.map((c) => c.alive) // as last recorded
   const kept = new Int32Array(SPAN).fill(-1) // the tick each slot holds
@@ -39,7 +41,7 @@ export function createRewind(world: RAPIER.World, combatants: readonly Combatant
       poses.set([c.position.x, c.position.y, c.position.z, c.rotation.x, c.rotation.y, c.rotation.z, c.rotation.w], i)
       if (alive[c.id] && !c.alive) deaths[c.id]++
       alive[c.id] = c.alive
-      lives[life(tick, c.id)] = c.alive ? deaths[c.id] : -1
+      lives[life(tick, c.id)] = !c.present ? ABSENT : c.alive ? deaths[c.id] : -1
     }
   }
 
@@ -68,7 +70,7 @@ export function createRewind(world: RAPIER.World, combatants: readonly Combatant
     let struck: RAPIER.Collider | null = wall ? wall.collider : null
     if (wall) shot.normal.set(wall.normal.x, wall.normal.y, wall.normal.z)
     for (const c of combatants) {
-      if (c === shooter) continue
+      if (c === shooter || lives[life(tick, c.id)] === ABSENT) continue
       const i = at(tick, c.id)
       place.set(poses[i], poses[i + 1], poses[i + 2])
       turn.set(poses[i + 3], poses[i + 4], poses[i + 5], poses[i + 6])

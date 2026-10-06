@@ -7,6 +7,81 @@ version it shipped with.
 
 ## Unreleased
 
+## 0.12.0 — 2026-10-06
+
+Custom lobbies: people pick a lobby from a list or come by invite, ready up in a waiting room,
+and its owner starts matches with their own settings. They live in the game server's memory
+beside Classic's matchmaking; Nakama is untouched. Plan, measurements and log:
+`.claude/work/custom/`.
+
+### Game (`game/`)
+
+- Custom lobbies on the arena screen (`screens/Custom.tsx`): the list (`Lobbies.tsx`: search,
+  filters, join by code, a password dialog), the create and edit drawer (`LobbyForm.tsx`), the
+  waiting room (`Lobby.tsx`: slots and sides, ready, bots, kick, the owner's hand-off, the
+  invite code and link, the tally, the lobby chat docked), avatars drawn from the user id
+  (`Avatar.tsx`). `net/custom.ts` is the page's store: the lobby's match comes as a welcome on
+  the lobby's socket, which goes back to the lobby once the match is over for the player; back
+  within the server's grace after a drop or a reload; `?join=CODE` links.
+- How a match is played is `MatchSettings` (`game/matchSettings.ts`): size (2–12), clock,
+  respawn speed, friendly fire, pickups by group, one gun for everyone, kill limit.
+  `classic(mode)` keeps Classic and practice as they were; `checkSettings` is the one
+  validator, on the page and the server.
+- Pickups are a module any mode plugs in (`game/items/`): free for all keeps its hot zones and
+  comeback pull through the supply's hooks; team deathmatch plugs it in when a lobby turns
+  pickups on.
+- Friendly fire in team deathmatch: a team kill takes a point off the killer's team and nothing
+  else; `Stats.teamKills` and a TK column, information only; bots hold fire near teammates.
+- Seats can be empty (`Combatant.present`, the rules' `absent` life): the machine is out of
+  play and out of sight; the car row's `absent` flag, the welcome and `ro` say so.
+- Line-ups by size. Both arenas' crew bases have six starts a side (four before; digests
+  Scrapyard `227c4ce7`, The City `8913ad26`); twelve bot names; the HUD holds twelve.
+- `PROTOCOL` 6: the welcome's settings and lobby, a seat's presence, the lobby messages (`lb`,
+  `lbs`), checked by `parseClient`.
+- Shared screens' parts: `Confirm.tsx` (the yes/no dialog), `Segmented` (`Menu.tsx`).
+
+### Online play (`game/server/`)
+
+- `custom.ts`, pure like `matchmaker.ts`: lobbies, members, slots and sides, owners, bans,
+  invite codes (40 random bits, Crockford base32), passwords (scrypt, compared with
+  `timingSafeEqual`, a lockout after five wrong a minute), the tally, a 20 s grace for a dropped
+  member, idle lobbies closed after 30 minutes, the list sent at most twice a second.
+- A session (a hello with no map) uses Classic's queue or custom lobbies, not both. A lobby's
+  match gets a room of its own from a seat plan: bots only where the owner put them, each at its
+  own difficulty; other seats empty. Someone who leaves leaves an empty seat; a minute without
+  input takes them back to the waiting room, not off the lobby's socket; no person seated for
+  10 s ends the match without a result; after the results the lobby hears the match is over
+  instead of a next match starting.
+- `MAX_LOBBIES` (default 24); custom rooms share `MAX_ROOMS` with Classic's; `/health` counts
+  `custom` rooms and `lobbies`. Logs name lobbies by id and people by user id, never an invite
+  code or a password.
+- Match records gain `custom: { lobby, settings }`; the replay header gains the settings, the
+  lobby and the seat plan, so a custom room replays to the bit.
+- `load.js` takes `SEATS`: 12 rooms of 12 people use 12 % of a core, 23 KB/s down a player.
+
+### Site (`www/`)
+
+- The guide: a Custom lobbies section (how to play), the lobby keys (controls), and what a
+  custom lobby changes (FAQ, modes, arenas).
+
+### Deploy
+
+- `deploy/compose.yml` explains why it doesn't pass `MAX_ROOMS` or `MAX_LOBBIES`: the server's
+  defaults apply, since podman-compose 1.3.0 hands `${VAR:-default}` on as text (#1).
+
+### Checks
+
+- Whole bots-only Classic matches, each mode on each arena, are pinned by hash
+  (`simulation.check.ts`, `server.check.ts`): Classic held through the refactor, re-pinned on
+  purpose for the new bases and `teamKills`.
+- New: `server/custom.check.ts` (every lobby action and refusal on a clock moved by hand); the
+  page's store in `client.check.ts` (a lobby, its match and back on one socket, drops, reloads,
+  an invite, a kick); more cases in `server.check.ts`, `protocol.check.ts`,
+  `simulation.check.ts`, `ffa.check.ts`, `tdm.check.ts` and `arena.check.ts`.
+- `scripts/browser-match.mjs custom`: two headless pages make and join a lobby by its code,
+  play two matches and go back to the waiting room, one reloads; a third opens the invite link
+  signed out.
+
 ## 0.11.0 — 2026-09-30
 
 Nakama stays the control plane (accounts, sessions, the online count, now the match chat); the
@@ -24,6 +99,8 @@ game server stays the authority for every outcome. Plan, measurements and log:
 - Arena screen: Custom (coming soon, disabled) between Free for All and Back; with Back
   chosen, the right side is empty. Menu entries can be disabled.
 - New checks: `net/chat.check.ts`, `server/fairplay.check.ts`.
+- Google Analytics follows the site's cookie banner (`analytics.ts`): one page view on the
+  first main menu, only after a yes; the game never asks (#3).
 
 ### Online play (`game/server/`)
 
@@ -52,6 +129,9 @@ game server stays the authority for every outcome. Plan, measurements and log:
 
 - Guide: chat controls; the FAQ says what is kept (records, replays for 3 days, no chat) and
   that guests last 3 days; the account page tells guests too.
+- A cookie banner on every page asks before Google Analytics loads (Accept / Decline, kept in
+  localStorage `scrapyard.consent`); the footer's Cookies asks again, and a later no clears
+  GA's cookies. The FAQ says what is counted (#3).
 
 ### Deploy
 

@@ -50,6 +50,10 @@ export function createFeed(names: readonly { name: string; team: number }[], me:
       if (mine && tags.length) callout(tags.join(' · '))
       else if (assists.includes(me)) callout('Assist', false)
     },
+    teamKill(killer, victim) {
+      const mine = killer === me
+      post({ who: mine ? 'You' : names[killer].name, text: 'wrecked', whom: name(victim), teams: [names[killer].team, names[victim].team], tag: 'Team kill', mine: mine || victim === me })
+    },
     death(victim, teams) {
       const mine = victim === me
       post({ who: mine ? 'You' : names[victim].name, text: mine ? 'were wrecked' : 'was wrecked', teams: [teams ? names[victim].team : -1, -1], mine })

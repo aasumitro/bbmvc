@@ -42,6 +42,8 @@ services:
       - ALLOWED_ORIGINS=https://${SITE_DOMAIN:?set SITE_DOMAIN in deploy/.env}
       - TRUST_PROXY=1
       - MATCH_DIR=/home/node/matches
+      # MAX_ROOMS and MAX_LOBBIES stay the server's defaults (12, 24): podman-compose 1.3.0 passes
+      # ${VAR:-default} on as text, which the server refuses (#1); to change one, a plain number here
     volumes:
       # server/current: the release scripts/deploy.sh switched to (server/releases/<sha>), read when the container starts
       - ../server/current:/srv/server:ro

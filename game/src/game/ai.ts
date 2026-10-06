@@ -20,6 +20,7 @@ const AI = {
   blocked: 0.6, // seconds pressing on a blocked nose before it backs out
   hideouts: [12, 20, 30], // metres out it looks for a hideout, twelve ways round
   lurk: [25, 55], // lies in wait only for an unseen target coming its way this far off
+  mateGap: 3, // friendly fire on: a teammate this close to its line of fire holds its trigger
 }
 
 // How each gun wants to fight: in sight and closer than `engage`, it circles
@@ -60,11 +61,12 @@ export const DIFFICULTIES = {
 } satisfies Record<string, Skill>
 export type Difficulty = keyof typeof DIFFICULTIES
 
-// A bot's gun: one off the garage's roster, drawn from `random` (the match's
-// seeded stream), its damage scaled and its spread floored by the skill.
-const WEAPON_IDS = Object.keys(WEAPONS) as WeaponId[]
-export function armBot(skill: Skill, random: () => number): WeaponSpec {
-  return botGun(WEAPONS[WEAPON_IDS[Math.floor(random() * WEAPON_IDS.length)]], skill)
+// A bot's gun: one off the garage's roster (or the guns a match allows),
+// drawn from `random` (the match's seeded stream), its damage scaled and its
+// spread floored by the skill.
+export const WEAPON_IDS = Object.keys(WEAPONS) as WeaponId[]
+export function armBot(skill: Skill, random: () => number, roster: readonly WeaponId[] = WEAPON_IDS): WeaponSpec {
+  return botGun(WEAPONS[roster[Math.floor(random() * roster.length)]], skill)
 }
 
 // A gun as a bot of `skill` fires it (a bot taking an online seat back gets its gun this way).
@@ -121,6 +123,7 @@ export interface Brain {
   burst: number // > 0: firing for that long; < 0: holding fire
   sight: number // seconds until the next line-of-sight check
   canSee: boolean
+  clear: boolean // no teammate in the way (friendly fire on; always, off)
   direct: boolean // the way straight to the target is open road
   room: boolean // open road round to the next point of its circle
   errand: THREE.Vector3 // where its current errand leads (see Plan)
@@ -129,10 +132,12 @@ export interface Brain {
 // Optional steering from the match rules (free for all): how near a rival
 // looks when choosing a target (Infinity: not a target at all), and
 // somewhere worth driving when there's no one to fight — `urgent`: even
-// with a target, still shooting at it on the way.
+// with a target, still shooting at it on the way. `careful`: friendly fire
+// is on, so a bot holds fire rather than hit a teammate.
 export interface Plan {
   value(bot: Agent, rival: Agent, distance: number): number
   errand(bot: Agent): { x: number; z: number; urgent: boolean } | null
+  careful?: boolean
 }
 
 // Holds fire for its first seconds, so a fresh spawn isn't shot before it can react.
@@ -162,6 +167,7 @@ export const createBrain = (seed: number, skill: Skill = DIFFICULTIES.normal): B
   burst: -3,
   sight: 0,
   canSee: false,
+  clear: true,
   direct: false,
   room: false,
   errand: new THREE.Vector3(Infinity, 0, Infinity),
@@ -206,6 +212,24 @@ function canSee(world: RAPIER.World, bot: Agent, target: Agent) {
   along.divideScalar(distance)
   const hit = world.castRay(ray, distance, true, undefined, undefined, undefined, bot.car.body)
   return !hit || hit.collider.parent()?.handle === target.car.body.handle
+}
+
+// No live teammate within mateGap of the line from the bot to where its gun
+// is laid, nor — firing rockets — inside the blast round that point. Flat
+// distances: every machine drives on the ground.
+export function clearOfMates(bot: Agent, everyone: readonly Agent[]) {
+  const aim = bot.control.aim
+  const blast = bot.weapon.spec.rocket?.blast ?? 0
+  const dx = aim.x - bot.position.x
+  const dz = aim.z - bot.position.z
+  const length = dx * dx + dz * dz || 1
+  for (const mate of everyone) {
+    if (mate === bot || !mate.alive || mate.team !== bot.team) continue
+    if (blast && flat(mate.position, aim) < blast) return false
+    const along = THREE.MathUtils.clamp(((mate.position.x - bot.position.x) * dx + (mate.position.z - bot.position.z) * dz) / length, 0, 1)
+    if (Math.hypot(bot.position.x + dx * along - mate.position.x, bot.position.z + dz * along - mate.position.z) < AI.mateGap) return false
+  }
+  return true
 }
 
 // Open road from a to b: nothing static across a car's width, kerbs
@@ -537,6 +561,7 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
   if (brain.sight <= 0) {
     brain.sight = 0.2
     brain.canSee = !!target && distance < style.fire && canSee(world, bot, target)
+    brain.clear = !plan?.careful || clearOfMates(bot, everyone)
     brain.direct = brain.canSee && open(world, bot.position, target!.position)
     brain.room = brain.direct && open(world, bot.position, circling)
     if (brain.direct && !brain.room) brain.orbit = -brain.orbit // blocked that way round: try the other next time
@@ -549,7 +574,7 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
     brain.burst += dt
     if (brain.burst >= 0) brain.burst = brain.canSee ? between(skill.burst, random) : -0.3
   }
-  let fire = brain.canSee && brain.burst > 0
+  let fire = brain.canSee && brain.clear && brain.burst > 0
   // a rocket leaves only with the gun on the lead (or the target on top of it): there are six, slow to reload
   if (fire && target && bot.weapon.spec.rocket && distance > 12) fire = toAim.subVectors(control.aim, bot.position).angleTo(toLead.subVectors(lead, bot.position)) < AI.aligned
   control.fire = fire

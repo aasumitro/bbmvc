@@ -67,7 +67,7 @@ for (const id of Object.keys(MAPS) as MapId[]) {
   const digest = arenaDigest(arena)
 
   check(arena.spawns.length >= 8, `${id}: at least 8 starts for free for all (${arena.spawns.length})`)
-  check(arena.bases?.length === 2 && arena.bases.every((base) => base.length >= 4), `${id}: two team bases of at least 4 starts`)
+  check(arena.bases?.length === 2 && arena.bases.every((base) => base.length >= 6), `${id}: two team bases of at least 6 starts (six a side)`)
   check((arena.zones?.length ?? 0) >= 1, `${id}: at least one hot zone`)
   check(arena.nav.nodes.length > 0 && connected(arena), `${id}: the road graph is in one piece`)
   check(arena.root.children.length === 0 && arena.emitters.length === 0, `${id}: nothing left to look at`)

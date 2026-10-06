@@ -195,6 +195,7 @@ export function createChat(channels: ChatChannels, roster: ChatRoster) {
     lines: lines as readonly ChatLine[],
     team: !!channels.team,
     send,
+    note, // a line from the page itself (a custom lobby's: who joined, left, what changed)
     subscribe(listener: () => void) {
       listeners.add(listener)
       return () => void listeners.delete(listener)

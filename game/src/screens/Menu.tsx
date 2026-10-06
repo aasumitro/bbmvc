@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 
 // The game's shared controls, one look on every screen.
 
@@ -99,5 +99,37 @@ export function ActionButton({ title, line, icon, onClick, primary, note, classN
       </span>
       {chevron(false, 'ml-auto h-5 w-5')}
     </button>
+  )
+}
+
+interface SegmentedProps<T> {
+  label: string // what it chooses, for screen readers
+  options: ReadonlyArray<{ id: T; label: string }>
+  value: T
+  onChange: (id: T) => void
+  focused?: boolean // the keys are on it: a red frame
+  disabled?: boolean
+}
+
+// One of a few, side by side in one frosted frame: the practice bots, a lobby's settings.
+export function Segmented<T extends string | number | boolean>({ label, options, value, onChange, focused, disabled }: SegmentedProps<T>) {
+  return (
+    <div role="radiogroup" aria-label={label} className={`flex w-fit overflow-hidden rounded-md border bg-black/45 backdrop-blur-md ${focused ? 'border-red-500' : 'border-white/15'}`}>
+      {options.map((option, i) => (
+        <Fragment key={String(option.id)}>
+          {i > 0 && <span className="w-px bg-white/15" />}
+          <button
+            type="button" // inside a form (the lobby drawer) a choice isn't a submit
+            role="radio"
+            aria-checked={option.id === value}
+            disabled={disabled}
+            onClick={() => onChange(option.id)}
+            className={`px-4 py-1.5 text-xs font-bold tracking-[0.2em] whitespace-nowrap uppercase disabled:cursor-not-allowed disabled:opacity-50 ${option.id === value ? 'bg-red-500/30 text-white' : 'text-neutral-400 enabled:hover:text-white'}`}
+          >
+            {option.label}
+          </button>
+        </Fragment>
+      ))}
+    </div>
   )
 }

@@ -4,11 +4,12 @@
 // node src/net/protocol.check.ts
 import * as THREE from 'three'
 import { WEAPONS } from '../game/combat.ts'
+import { checkSettings, classic } from '../game/matchSettings.ts'
 import { createWorld, initPhysics } from '../game/physics.ts'
 import { createStats } from '../game/scoring.ts'
 import { enlist } from '../game/simulation.ts'
 import { forwardSpeed } from '../game/vehicle/drive.ts'
-import { acceptSeq, AIM_MARGIN, BUILD, carRow, clampAim, clampView, inputMessage, LIMITS, meRow, packCars, packEvents, packSnapshot, parseClient, readCar, readMe, readServer, readStats, REWIND, SNAPSHOT, statsRow, unpackSnapshot, weaponId, wireSize, type Input, type WireEvent } from './protocol.ts'
+import { acceptSeq, AIM_MARGIN, BUILD, carRow, clampAim, clampView, INVITE, inputMessage, LIMITS, meRow, packCars, packEvents, packSnapshot, parseClient, readCar, readCode, readMe, readServer, readStats, REWIND, SNAPSHOT, statsRow, unpackSnapshot, weaponId, wireSize, type Input, type WireEvent } from './protocol.ts'
 
 await initPhysics()
 
@@ -45,6 +46,10 @@ check(near(back.health, 63.37, 0.05) && near(back.steer, -0.41, 0.005), 'hull wi
 check(near(back.speed, forwardSpeed(car.car), 0.02), `speed worked out from rotation and velocity (${back.speed.toFixed(3)} vs ${forwardSpeed(car.car).toFixed(3)})`)
 car.alive = false
 check(!readCar(carRow(car)).alive, 'a wreck reads as one')
+check(back.present && (row[12] & 8) === 0, 'a machine in play: no absent flag, the row as it always was')
+car.present = false
+check(!readCar(carRow(car)).present, 'an empty seat reads as one')
+car.present = true
 
 car.weapon.ammo = 4
 car.weapon.reload = 1.2345
@@ -161,4 +166,36 @@ check(clampView(100, 500) === 500 - REWIND && clampView(900, 500) === 500 && cla
 check(acceptSeq(5, 6) && !acceptSeq(5, 5) && !acceptSeq(5, 4), 'seqs only move forward')
 
 world.free()
+// --- custom lobbies: the settings validator, and every lobby message's rules -----------------------------------
+{
+  const tdm = { ...classic('tdm'), size: 12, duration: 1800, respawn: 'fast', friendlyFire: true, items: { health: true, ammo: false, powerups: true }, weapons: 'rocketPod', killLimit: 25 }
+  const ok = checkSettings('tdm', { ...tdm, extra: 'nothing' })
+  check(ok.ok && JSON.stringify(ok.settings) === JSON.stringify(tdm), 'a custom lobby’s settings pass whole, and nothing unnamed gets through')
+  check(checkSettings('ffa', classic('ffa')).ok && checkSettings('tdm', classic('tdm')).ok, 'Classic’s own settings are custom ones too')
+  const bad = checkSettings('tdm', { ...tdm, size: 7, duration: 61, respawn: 'warp', friendlyFire: 'yes', items: { health: 1 }, weapons: 'laser', killLimit: 3 })
+  check(!bad.ok && Object.keys(bad.errors).length === 7, 'every field out of range or of the wrong type named, each once')
+  const ffaFriendly = checkSettings('ffa', { ...classic('ffa'), friendlyFire: true })
+  check(!ffaFriendly.ok && !!ffaFriendly.errors.friendlyFire, 'friendly fire is for team deathmatch')
+  check(!checkSettings('tdm', null).ok && !checkSettings('ffa', 'x').ok, 'no settings at all: refused')
+
+  const lb = (fields: Record<string, unknown>) => parseClient(JSON.stringify({ t: 'lb', ...fields }))
+  const form = { name: 'Friday night', open: true, password: 'hunter22', mode: 'tdm', map: 'city', settings: tdm, jip: true }
+  const made = lb({ do: 'create', ...form, sneaky: 1 })
+  check(made.ok && made.message.t === 'lb' && made.message.do === 'create' && JSON.stringify(made.message.form) === JSON.stringify(form), 'create: the form whole, nothing else')
+  const kept = lb({ do: 'edit', ...form, password: null })
+  check(kept.ok && kept.message.t === 'lb' && kept.message.do === 'edit' && kept.message.form.password === null, 'edit: a password left as it was (null)')
+  check([{ ...form, name: '' }, { ...form, name: 'x'.repeat(LIMITS.lobby + 1) }, { ...form, open: 'yes' }, { ...form, password: 'x'.repeat(LIMITS.password + 1) }, { ...form, mode: 'derby' }, { ...form, map: '' }, { ...form, settings: { ...tdm, size: 13 } }, { ...form, jip: 1 }].every((f) => !lb({ do: 'create', ...f }).ok), 'create: a bad name, flag, password, mode, map or setting is refused')
+  const joined = lb({ do: 'join', id: 'a1b2c3d4' })
+  check(joined.ok && joined.message.t === 'lb' && joined.message.do === 'join' && joined.message.password === '', 'join: an id, no password means none')
+  check(!lb({ do: 'join', id: '' }).ok && !lb({ do: 'join', id: 'x'.repeat(LIMITS.code + 1) }).ok, 'join: an id that can’t be one is refused')
+  check(lb({ do: 'code', code: 'AB12CD34' }).ok && !lb({ do: 'code', code: 'AB12CD3' }).ok && !lb({ do: 'code', code: 'AB12CD3I' }).ok && !lb({ do: 'code', code: 'ab12cd34' }).ok, 'code: eight Crockford base32 characters (no I, L, O or U), as the page sends it')
+  check(readCode('ab1o-cd3l ') === 'AB10CD31' && INVITE.test(readCode('ab1o-cd3l ')) && !INVITE.test(readCode('ab1u-cd3l')), 'a code as typed or in a link: case, dashes and spaces dropped, O, I and L read as digits; U stays wrong')
+  check(lb({ do: 'ready', on: false }).ok && !lb({ do: 'ready', on: 'no' }).ok, 'ready: a flag')
+  check(lb({ do: 'slot', slot: 11 }).ok && !lb({ do: 'slot', slot: 12 }).ok && !lb({ do: 'slot', slot: 1.5 }).ok && !lb({ do: 'unbot', slot: -1 }).ok, 'slot, unbot: a whole number of a slot, 0 to 11')
+  check(lb({ do: 'bot', slot: 3, skill: 'hard' }).ok && !lb({ do: 'bot', slot: 3, skill: 'godlike' }).ok, 'bot: a slot and a difficulty there is')
+  check(lb({ do: 'kick', uid: 'u-1' }).ok && !lb({ do: 'owner', uid: '' }).ok && !lb({ do: 'kick', uid: 'x'.repeat(LIMITS.uid + 1) }).ok, 'kick, owner: a user id')
+  check(['watch', 'unwatch', 'leave', 'start', 'reset', 'play', 'wait'].every((act) => lb({ do: act }).ok) && !lb({ do: 'dance' }).ok, 'the actions with no fields; one that isn’t an action is refused')
+  check(!parseClient(JSON.stringify({ t: 'lb', do: 'create', ...form, name: 'x'.repeat(30), pad: 'x'.repeat(LIMITS.input) })).ok, 'a lobby message over the input limit is refused')
+}
+
 console.log(`protocol ok (${checks} checks)`)

@@ -44,7 +44,7 @@ export async function replay(lines: AsyncIterable<ReplayLine> | Iterable<ReplayL
   const header = first
   const seeds: number[] = []
   const records: MatchRecord[] = []
-  const room = createRoom({ id: header.room, mode: header.mode, map: header.map, build: header.build, hold: header.hold, seed: header.seed, results: header.results, created: header.created, arena: arena?.(header.map), reseed: () => seeds.shift()!, record: (m) => records.push(m) })
+  const room = createRoom({ id: header.room, mode: header.mode, map: header.map, build: header.build, hold: header.hold, seed: header.seed, results: header.results, created: header.created, arena: arena?.(header.map), reseed: () => seeds.shift()!, record: (m) => records.push(m), settings: header.settings, lobby: header.lobby, plan: header.plan })
   // By seat, what the journal last said it was given: the view as its lag behind each step
   const given = new Map<number, { kind: Given['kind']; input: Omit<Given['input'], 'view'>; lag: number }>()
   const bySeat = new Map<number, Human>()
@@ -57,7 +57,7 @@ export async function replay(lines: AsyncIterable<ReplayLine> | Iterable<ReplayL
       last = Math.max(last, line.k)
       if ('join' in line) {
         const [seat, uid, name, weapon] = line.join
-        const human = room.join({ uid, name, loadout: { vehicle: 'razor', weapon }, send() {}, close() {} }, (step - 1) * STEP_MS)
+        const human = room.join({ uid, name, loadout: { vehicle: 'razor', weapon }, send() {}, close() {} }, (step - 1) * STEP_MS, seat) // a custom room seats them where the line says; Classic finds the same seat itself
         if (!human || human.seat !== seat) throw new Error(`replay diverged after step ${line.k}: ${name} took seat ${human?.seat ?? 'none'}, not ${seat}`)
         bySeat.set(seat, human)
         given.delete(seat)

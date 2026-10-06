@@ -16,7 +16,8 @@ Match (client)          game/match.ts                                  compositi
       ↓                         ↓                     ↓
 Presentation            game/view.ts, feed.ts, pilot.ts,        Mode adapters   game/modes.ts (registry)
                         camera.ts, effects.ts, audio.ts,                        game/ffa/mode.ts, game/tdm/mode.ts
-                        ffa/pickups.ts, hud/minimap.ts                                  ↓
+                        items/pickups.ts, ffa/zone.ts,                                  ↓
+                        hud/minimap.ts
       ↓                                                         Mode rules      ffa/rules.ts, tdm/rules.ts,
 Simulation              game/simulation.ts                      (pure)          tdm/tactics.ts, scoring.ts
       ↓                                                                                 ↑ (contract)
@@ -44,9 +45,9 @@ Rendering content       vehicle/vehicle.ts, vehicle/parts.ts, materials/*, geome
 | `game/pilot.ts` | the local control source: input → controls, aim + lock-on, sight of rivals | `input.ts`, camera, world ray casts | rules, presentation |
 | `game/feed.ts` | kill feed lines, callouts, announcer, countdown beeps; implements `Feed` | audio, scoring titles | mode internals (the adapters call it) |
 | `game/mode.ts` | the mode contract (`MatchMode`, `ModeRules`, `Feed`, `Seat`, `ModeTiming`) | types only | values from any mode |
-| `game/modes.ts` | mode registry: cards, line-up, adapter factory, the pickups view hand-in | the adapters, `ffa/pickups.ts` | the match |
+| `game/modes.ts` | mode registry: cards, line-up by size, adapter factory, the pickups and hot-zone views handed in | the adapters, `items/pickups.ts`, `ffa/zone.ts` | the match |
 | `game/ffa/mode.ts`, `game/tdm/mode.ts` | the mode's integration: seats, rules creation, bot plan, outcome, event reporting, debug lines | own rules, config, tactics; `mode.ts` | rendering, audio, DOM (FFA's scenery is handed in) |
-| `game/ffa/rules.ts`, `tdm/rules.ts`, `tdm/tactics.ts`, `scoring.ts` | the domain rules and statistics | config, `rng.ts` | anything else (pure, node-checked) |
+| `game/ffa/rules.ts`, `tdm/rules.ts`, `tdm/tactics.ts`, `scoring.ts`, `items/` (not `pickups.ts`) | the domain rules and statistics; the pickups any mode plugs in | config, `rng.ts`, `matchSettings.ts` | anything else (pure, node-checked) |
 | `game/ai.ts` | bot driving and targeting | `Agent` (its own interface), Rapier casts, nav graph | the simulation module, modes |
 | `game/combat.ts` | weapon registry (`WEAPONS` by id), weapon state, trigger, hitscan cast | Rapier | combatants |
 | `game/vehicle/vehicles.ts` | vehicle registry (`VEHICLES` by id): handling, chassis, turret mount, armour, garage copy | types | Three.js, visuals |
