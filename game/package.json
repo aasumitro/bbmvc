@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "server": "npm run server:build && node dist-server/main.js",
     "server:build": "vite build --config vite.server.config.ts",
-    "server:check": "npm run server:build && node --expose-gc dist-server/arena.check.js && node dist-server/server.check.js && node dist-server/client.check.js && node dist-server/netplay.check.js"
+    "server:check": "npm run server:build && node --expose-gc dist-server/arena.check.js && node dist-server/server.check.js && node --experimental-webstorage dist-server/client.check.js && node dist-server/netplay.check.js"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.20.0",
