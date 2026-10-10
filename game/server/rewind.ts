@@ -1,8 +1,8 @@
 import RAPIER from '@dimforge/rapier3d-compat'
 import * as THREE from 'three'
-import { scatterAim, type Shot } from '../src/game/combat'
-import type { Combatant } from '../src/game/simulation'
-import { VEHICLES } from '../src/game/vehicle/vehicles'
+import { scatterAim, type Shot } from '../src/sim/combat.ts'
+import type { Combatant } from '../src/sim/simulation.ts'
+import { VEHICLES } from '../src/content/vehicles/vehicles.ts'
 
 // Lag compensation for hitscan: a player aims at the others as their page
 // draws them — a little in the past (net/snapshots.ts) — so the server
@@ -18,8 +18,6 @@ import { VEHICLES } from '../src/game/vehicle/vehicles'
 
 const SPAN = 60 // ticks of poses kept (a second)
 const ABSENT = -2 // a life: out of play
-
-export type Rewind = ReturnType<typeof createRewind>
 
 export function createRewind(world: RAPIER.World, combatants: readonly Combatant[]) {
   const poses = new Float64Array(SPAN * combatants.length * 7) // per tick and machine: position, rotation

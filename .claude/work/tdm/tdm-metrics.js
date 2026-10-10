@@ -30,9 +30,10 @@ window.tdmMetrics = (() => {
   const FINAL = 9 * 60 // elapsed where the final minute starts
 
   M.setup = async () => {
-    M.ai = await import('/src/game/ai.ts')
-    M.combat = await import('/src/game/combat.ts')
-    M.cfg = (await import('/src/game/tdm/config.ts')).TDM
+    M.ai = await import('/src/sim/ai/brain.ts')
+    M.combat = await import('/src/sim/combat.ts')
+    M.weapons = await import('/src/content/weapons/weapons.ts')
+    M.cfg = (await import('/src/modes/tdm/config.ts')).TDM
     const m = window.match
     const { combatants: C, chase: view, arena } = m
     const tdm = m.mode.kind === 'tdm' ? m.mode.rules : null
@@ -277,7 +278,7 @@ window.tdmMetrics = (() => {
     M.auto = mode ? { mode } : null
     p.brain = mode ? M.ai.createBrain(p.seed) : undefined // the simulation thinks for any machine with a brain
     const garage = mode === 'gun' || mode === 'human'
-    p.weapon = M.combat.armWeapon(garage ? M.combat.WEAPONS.minigun : m.others[0].weapon.spec)
+    p.weapon = M.combat.armWeapon(garage ? M.weapons.WEAPONS.minigun : m.others[0].weapon.spec)
   }
 
   function newRun(label) {
@@ -347,7 +348,7 @@ window.tdmMetrics = (() => {
     const aliveSec = sum(runs.flatMap((r) => r.alive))
     const ot = runs.filter((r) => r.overtimeAt != null)
     const n = runs[0].final.length
-    const schedule = (d) => (d.phase === 'overtime' ? cfg.respawn.overtime : cfg.respawn.phases.find((p) => d.t < p.before).delay)
+    const schedule = (d) => (d.phase === 'overtime' ? cfg.respawn.overtime : cfg.respawn.phases.find((p) => d.t < p.share * cfg.duration).delay) // shares of the clock (Classic's length)
     const seat = (f) => runs[0].final.map((_, i) => r1(avg(runs.map((r) => f(r.final[i])))))
 
     // who scored, who helped, who was MVP and why

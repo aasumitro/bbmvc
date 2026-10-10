@@ -1,7 +1,7 @@
 import type { Channel, ChannelMessage, ChannelPresenceEvent, Notification, Socket } from '@heroiclabs/nakama-js'
-import { readChat, type Person } from './chatCommand'
-import type { ChatChannels } from './protocol'
-import { nakama, onSocket, player } from './session'
+import { readChat, type Person } from './chatCommand.ts'
+import type { ChatChannels } from './protocol.ts'
+import { nakama, onSocket, player } from './session.ts'
 
 // A Classic match's chat, over the page's own Nakama socket (session.ts):
 // everyone in the room, the team (team deathmatch), and whispers. The room
@@ -21,7 +21,7 @@ import { nakama, onSocket, player } from './session'
 
 export type ChatKind = 'all' | 'team' | 'from' | 'to' | 'note'
 
-export interface ChatLine {
+interface ChatLine {
   id: number
   kind: ChatKind // all, team; a whisper from someone, or to someone; a note from the page itself
   who: string
@@ -30,7 +30,7 @@ export interface ChatLine {
 }
 
 // Who holds each seat, as the match knows it now (seats change hands mid-match).
-export interface ChatRoster {
+interface ChatRoster {
   names(): readonly string[]
   uids(): readonly string[] // '' a bot's
   me(): number // the player's seat
@@ -109,7 +109,11 @@ export function createChat(channels: ChatChannels, roster: ChatRoster) {
     if (n.code !== DM_REQUEST || !n.sender_id) return
     if (seatOf(n.sender_id) >= 0 && !muted.has(n.sender_id)) void whisperChannel(n.sender_id).catch(() => {})
     const id = n.id
-    if (id) void player().then((p) => nakama.deleteNotifications(p.session, [id]), () => {}) // they're kept otherwise
+    if (id)
+      void player().then(
+        (p) => nakama.deleteNotifications(p.session, [id]),
+        () => {},
+      ) // they're kept otherwise
   }
 
   async function join(key: string, target: string, type: 1 | 2) {
@@ -203,7 +207,10 @@ export function createChat(channels: ChatChannels, roster: ChatRoster) {
     version: () => version,
     // Joins the match's channels on the page's socket (again after each reconnect) until dispose.
     start() {
-      void player().then((p) => (me = p.session.user_id ?? ''), () => {})
+      void player().then(
+        (p) => (me = p.session.user_id ?? ''),
+        () => {},
+      )
       unsubscribe = onSocket((s) => void connect(s))
     },
     dispose() {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { QUALITY } from '../game/postprocessing'
-import { DEFAULT_SETTINGS, maxResolutionScale, onSettingsChange, QUALITIES, renderScale, settings, updateSettings } from '../game/settings'
+import { QUALITY } from '../render/postprocessing.ts'
+import { QUALITIES } from '../render/postprocessing.ts'
+import { DEFAULT_SETTINGS, maxResolutionScale, onSettingsChange, renderScale, settings, updateSettings } from '../view/settings.ts'
 
 const percent = (value: number) => Math.round(value * 100)
 
@@ -108,7 +109,10 @@ function Toggle({ label, keycap, checked, onChange }: { label: string; keycap?: 
 // Every setting back to its default, from the drawer's footer (every tab).
 export function RestoreDefaults() {
   return (
-    <button onClick={() => updateSettings(DEFAULT_SETTINGS)} className="border-b border-red-500/70 pb-0.5 text-xs font-bold tracking-[0.2em] text-red-400 uppercase hover:text-red-300">
+    <button
+      onClick={() => updateSettings(DEFAULT_SETTINGS)}
+      className="border-b border-red-500/70 pb-0.5 text-xs font-bold tracking-[0.2em] text-red-400 uppercase hover:text-red-300"
+    >
       Restore defaults
     </button>
   )
@@ -134,7 +138,12 @@ export function SettingsPanel() {
 
   const quality = QUALITY[settings.quality]
   const scale = renderScale()
-  const pipeline = [quality.samples ? `${quality.samples}× MSAA` : 'No anti-aliasing', quality.occlusion && 'ambient occlusion', quality.bloom && 'bloom', `${quality.shadowMap / 1024}K shadows`]
+  const pipeline = [
+    quality.samples ? `${quality.samples}× MSAA` : 'No anti-aliasing',
+    quality.occlusion && 'ambient occlusion',
+    quality.bloom && 'bloom',
+    `${quality.shadowMap / 1024}K shadows`,
+  ]
 
   return (
     <div className="flex flex-col gap-7">
@@ -168,7 +177,9 @@ export function SettingsPanel() {
                       key={level}
                       onClick={() => updateSettings({ quality: level })}
                       className={`-ml-px border px-3 py-1 text-xs font-bold tracking-[0.15em] uppercase ${
-                        settings.quality === level ? 'relative border-red-500 bg-red-500/20 text-white' : 'border-white/15 text-neutral-400 hover:text-neutral-200'
+                        settings.quality === level
+                          ? 'relative border-red-500 bg-red-500/20 text-white'
+                          : 'border-white/15 text-neutral-400 hover:text-neutral-200'
                       }`}
                     >
                       {level}
@@ -217,9 +228,30 @@ export function SettingsPanel() {
 
         {tab === 'Sound' && (
           <>
-            <Slider label="Master volume" value={percent(settings.masterVolume)} min={0} max={100} readout={`${percent(settings.masterVolume)}%`} onChange={(value) => updateSettings({ masterVolume: value / 100 })} />
-            <Slider label="Music" value={percent(settings.musicVolume)} min={0} max={100} readout={`${percent(settings.musicVolume)}%`} onChange={(value) => updateSettings({ musicVolume: value / 100 })} />
-            <Slider label="Effects" value={percent(settings.effectsVolume)} min={0} max={100} readout={`${percent(settings.effectsVolume)}%`} onChange={(value) => updateSettings({ effectsVolume: value / 100 })} />
+            <Slider
+              label="Master volume"
+              value={percent(settings.masterVolume)}
+              min={0}
+              max={100}
+              readout={`${percent(settings.masterVolume)}%`}
+              onChange={(value) => updateSettings({ masterVolume: value / 100 })}
+            />
+            <Slider
+              label="Music"
+              value={percent(settings.musicVolume)}
+              min={0}
+              max={100}
+              readout={`${percent(settings.musicVolume)}%`}
+              onChange={(value) => updateSettings({ musicVolume: value / 100 })}
+            />
+            <Slider
+              label="Effects"
+              value={percent(settings.effectsVolume)}
+              min={0}
+              max={100}
+              readout={`${percent(settings.effectsVolume)}%`}
+              onChange={(value) => updateSettings({ effectsVolume: value / 100 })}
+            />
           </>
         )}
 

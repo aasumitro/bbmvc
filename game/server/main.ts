@@ -1,7 +1,7 @@
-import { MAPS, type MapId } from '../src/game/maps'
-import { initPhysics } from '../src/game/physics'
-import { arenaData } from './arenas'
-import { createGameServer } from './server'
+import { MAPS, type MapId } from '../src/content/arenas/maps.ts'
+import { initPhysics } from '../src/sim/physics.ts'
+import { arenaData } from './arenas.ts'
+import { createGameServer } from './server.ts'
 
 // The game server's entry: settings from the environment, the physics
 // engine and every arena built up front (a player never waits on one), then
@@ -25,7 +25,13 @@ const refuse = (reason: string): never => {
   console.error(JSON.stringify({ time: new Date().toISOString(), msg: 'not starting', reason }))
   process.exit(1)
 }
-const list = (value: string | undefined, fallback: string[]) => (value ? value.split(',').map((s) => s.trim()).filter(Boolean) : fallback)
+const list = (value: string | undefined, fallback: string[]) =>
+  value
+    ? value
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : fallback
 // A whole number from the environment, or the default when it's unset. Anything
 // else stops the server: a setting that reads as NaN fails quietly elsewhere
 // (MAX_ROOMS as NaN once left the matcher no room to open, so nobody was matched).
@@ -39,7 +45,13 @@ const trustProxy = env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true'
 const key = env.NAKAMA_ENCRYPTION_KEY || 'defaultencryptionkey'
 // Behind the proxy is production: there, Nakama's default key (or none) would let anyone sign a session.
 if (trustProxy && key === 'defaultencryptionkey') refuse('NAKAMA_ENCRYPTION_KEY is unset or Nakama’s default, and TRUST_PROXY says this is production')
-const settings = { port: whole('PORT', 7360, 0), maxRooms: whole('MAX_ROOMS', 12, 1), maxLobbies: whole('MAX_LOBBIES', 24, 1), lag: whole('NET_LAG_MS', 0, 0), jitter: whole('NET_JITTER_MS', 0, 0) }
+const settings = {
+  port: whole('PORT', 7360, 0),
+  maxRooms: whole('MAX_ROOMS', 12, 1),
+  maxLobbies: whole('MAX_LOBBIES', 24, 1),
+  lag: whole('NET_LAG_MS', 0, 0),
+  jitter: whole('NET_JITTER_MS', 0, 0),
+}
 
 await initPhysics()
 for (const id of Object.keys(MAPS) as MapId[]) arenaData(id)

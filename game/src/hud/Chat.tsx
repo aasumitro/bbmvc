@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { Chat, ChatKind } from '../net/chat'
-import { CHAT_LIMIT } from '../net/chatCommand'
-import { useClock } from '../screens/search'
+import type { Chat, ChatKind } from '../net/chat.ts'
+import { CHAT_LIMIT } from '../net/chatCommand.ts'
+import { useClock } from '../screens/hooks.ts'
 
 // The match chat (net/chat.ts), online only: its last lines at the left
 // edge above the speedometer, each fading 10 s after it came. Enter opens a
@@ -74,11 +74,15 @@ export function ChatBox({ chat, onTyping = () => {}, docked = false }: ChatBoxPr
 
   return (
     <div
-      className={`text-[0.78rem] leading-snug font-semibold [text-shadow:0_1px_3px_rgba(0,0,0,0.9)] ${docked ? 'flex h-full flex-col' : 'pointer-events-none fixed bottom-[calc(2.6vh+clamp(150px,13vw,240px)+2vh)] left-[2vw] z-[5] w-[min(36vw,460px)]'}`}
+      className={`text-[0.78rem] leading-snug font-semibold [text-shadow:0_1px_3px_rgba(0,0,0,0.9)] ${docked ? 'flex h-full flex-col' : 'pointer-events-none fixed bottom-[calc(2.6vh+clamp(150px,13vw,240px)+2vh)] left-[2vw] z-5 w-[min(36vw,460px)]'}`}
     >
-      <ol aria-live="polite" aria-label={docked ? 'Lobby chat' : 'Match chat'} className={`flex flex-col gap-0.5 ${to ? 'rounded bg-black/45 p-2 backdrop-blur-xs' : ''} ${docked ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}>
+      <ol
+        aria-live="polite"
+        aria-label={docked ? 'Lobby chat' : 'Match chat'}
+        className={`flex flex-col gap-0.5 ${to ? 'rounded bg-black/45 p-2 backdrop-blur-xs' : ''} ${docked ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}
+      >
         {shown.map((line) => (
-          <li key={line.id} className={`break-words ${TONES[line.kind]}`}>
+          <li key={line.id} className={`wrap-break-word ${TONES[line.kind]}`}>
             {TAGS[line.kind]}
             {line.who && <span className="font-extrabold">{line.who}: </span>}
             {line.text}
@@ -86,14 +90,19 @@ export function ChatBox({ chat, onTyping = () => {}, docked = false }: ChatBoxPr
         ))}
       </ol>
       {docked && !to && (
-        <button onClick={() => open('all')} className="mt-1.5 flex w-full items-center gap-2 rounded border border-white/15 bg-black/40 px-2 py-1.5 text-left text-neutral-500 hover:border-white/30">
+        <button
+          onClick={() => open('all')}
+          className="mt-1.5 flex w-full items-center gap-2 rounded border border-white/15 bg-black/40 px-2 py-1.5 text-left text-neutral-500 hover:border-white/30"
+        >
           <span className="rounded border border-neutral-500/50 px-1.5 text-[0.62rem] text-neutral-400">T</span>
           Say something to the lobby
         </button>
       )}
       {to && (
         <label className="pointer-events-auto mt-1.5 flex items-center gap-2 rounded border border-white/20 bg-black/70 px-2 py-1.5 backdrop-blur-xs">
-          <span className={`text-[0.62rem] font-bold tracking-[0.2em] uppercase ${to === 'team' ? 'text-sky-300' : 'text-red-400'}`}>{to === 'team' ? 'Team' : 'All'}</span>
+          <span className={`text-[0.62rem] font-bold tracking-[0.2em] uppercase ${to === 'team' ? 'text-sky-300' : 'text-red-400'}`}>
+            {to === 'team' ? 'Team' : 'All'}
+          </span>
           <input
             ref={field}
             type="text"

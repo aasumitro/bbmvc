@@ -17,7 +17,7 @@
 // the lobby; screenshots of the list, the drawer, the waiting rooms and the
 // match, at a desktop's size. Not a reload in a match: a page reloaded cold
 // under SwiftShader takes minutes to load the match again, past the
-// server's minute without input (client.check holds coming back to a seat).
+// server's minute without input (server/client.test.ts holds coming back to a seat).
 // SwiftShader draws on the CPU: 1–2 frames a second here, so a page steps a
 // fraction of real time and its inputs reach the server in bursts, with gaps
 // past the server's 250 ms (the car coasts between them); the prediction
@@ -127,7 +127,7 @@ async function open(name) {
   const from = performance.now()
   const p = await newPage(name)
   await p.page.getByText('Classic', { exact: true }).click({ timeout: 60_000 }) // Find Match: two searchers meet once the older has waited 30 s
-  await p.page.getByText('Match found', { exact: true }).waitFor({ timeout: 90_000 })
+  await p.page.getByRole('alertdialog').getByText('Match found', { exact: true }).waitFor({ timeout: 90_000 }) // the ready check's, not the arena screen's Classic button
   await p.page.keyboard.press('KeyY') // accept
   await inMatch(p)
   say(`${name}: in the match, ${((performance.now() - from) / 1000).toFixed(0)} s after opening the page`)
@@ -252,12 +252,20 @@ async function classicMatch() {
   const idle = await travel(5)
   const clock = await a.page.evaluate(() => window.match.elapsed)
   const wall = performance.now()
-  await a.page.keyboard.down('KeyW')
-  const held = await travel(12)
-  await a.page.keyboard.up('KeyW')
+  const hold = async (key) => {
+    await a.page.keyboard.down(key)
+    const moved = await travel(12)
+    await a.page.keyboard.up(key)
+    return moved
+  }
+  const held = await hold('KeyW')
+  // the seat's bot may have parked the car nose to a wall, where W alone doesn't move it: then S backs it out, and that counts too
+  const backed = held.path > 3 ? null : await hold('KeyS')
+  const driven = held.path + (backed?.path ?? 0)
   const pace = (((await a.page.evaluate(() => window.match.elapsed)) - clock) / ((performance.now() - wall) / 1000)) * 100
   const [corrections, fps] = await a.page.evaluate(() => [window.match.debug().find((text) => text.startsWith('CORR')) ?? '', /FPS\s+(\d+)/.exec(document.body.innerText)?.[1] ?? '?'])
-  check(held.path > 3 && held.path > idle.path * 3, `a held W for 12 s: on b's screen a's car drove ${held.path.toFixed(1)} m (${idle.path.toFixed(1)} m in 5 s with no key; respawn jumps left out: ${held.jumps} + ${idle.jumps}). a drew ${fps} frames a second and its match clock ran at ${pace.toFixed(0)} % of real time; ${corrections.trim().replace(/\s+/g, ' ') || 'no CORR line'}`)
+  const keys = backed ? `W for 12 s, then S for 12 s: on b's screen a's car drove ${held.path.toFixed(1)} m forward and ${backed.path.toFixed(1)} m back` : `W for 12 s: on b's screen a's car drove ${held.path.toFixed(1)} m`
+  check(driven > 3 && driven > idle.path * 3, `a held ${keys} (${idle.path.toFixed(1)} m in 5 s with no key; respawn jumps left out: ${held.jumps}${backed ? ` + ${backed.jumps}` : ''} + ${idle.jumps}). a drew ${fps} frames a second and its match clock ran at ${pace.toFixed(0)} % of real time; ${corrections.trim().replace(/\s+/g, ' ') || 'no CORR line'}`)
   say(`screenshots: ${await shot(a, 'driven')}, ${await shot(b, 'sees-a-driven')}`)
 
   // a leaves: its seat goes back to a bot, on b's page too

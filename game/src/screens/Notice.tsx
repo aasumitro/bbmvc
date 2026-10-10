@@ -11,7 +11,7 @@ export function Notice({ title, line }: NoticeProps) {
       className="fixed inset-0 flex flex-col items-center justify-center gap-6 bg-cover bg-center px-6 text-center text-[#f2ece0] before:absolute before:inset-0 before:bg-black/65 before:content-['']"
       style={{ backgroundImage: `url('${import.meta.env.BASE_URL}bg/loading.jpg')` }}
     >
-      <h1 className="relative m-0 font-display text-5xl font-semibold tracking-[0.05em] drop-shadow-[0_0_32px_rgba(220,38,38,0.5)]">Scrapyard</h1>
+      <h1 className="relative m-0 font-display text-5xl font-semibold tracking-wider drop-shadow-[0_0_32px_rgba(220,38,38,0.5)]">Scrapyard</h1>
       <div role="alert" className="relative max-w-sm">
         <p className="font-sans text-xs tracking-[0.3em] text-red-400 uppercase">{title}</p>
         <p className="mt-3 font-display text-lg text-neutral-200 italic">{line}</p>

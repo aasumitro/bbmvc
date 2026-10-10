@@ -1,13 +1,14 @@
 import * as THREE from 'three'
-import type { Arena } from '../src/game/arena/arena'
-import type { Feed } from '../src/game/mode'
-import { PHYSICS_STEP } from '../src/game/physics'
-import type { Combatant, SimEvents } from '../src/game/simulation'
-import { createNetClient, seatOnline } from '../src/net/client'
-import { join, openSocket, type Link } from '../src/net/connection'
-import { mintToken } from './auth'
+import type { Arena } from '../src/content/arenas/arena.ts'
+import type { VehicleId } from '../src/content/vehicles/vehicles.ts'
+import type { Feed } from '../src/sim/matchMode.ts'
+import { PHYSICS_STEP } from '../src/sim/physics.ts'
+import type { Combatant, SimEvents } from '../src/sim/simulation.ts'
+import { createNetClient, seatOnline } from '../src/net/client.ts'
+import { join, openSocket, type Link } from '../src/net/connection.ts'
+import { mintToken } from './auth.ts'
 
-// A browser without the browser, for the checks: a player's page as
+// A browser without the browser, for the tests: a player's page as
 // online.ts builds it (net/connection.ts, net/client.ts), with a presenter
 // that writes down what it's shown and a feed that writes down what it's
 // told, and frames run the way the page runs them — fixed steps out of
@@ -24,13 +25,23 @@ export interface BrowserOptions {
   mode?: string
   map?: string
   weapon?: 'minigun' | 'rocketPod'
+  vehicle?: VehicleId
 }
 
 export type Browser = Awaited<ReturnType<typeof browser>>
 
-export async function browser({ port, key, origin, uid, arena, mode = 'tdm', map = 'scrapyard', weapon = 'minigun' }: BrowserOptions) {
+export async function browser({ port, key, origin, uid, arena, mode = 'tdm', map = 'scrapyard', weapon = 'minigun', vehicle = 'razor' }: BrowserOptions) {
   const socket = await openSocket(`ws://127.0.0.1:${port}/match`, origin)
-  return page(await join(socket, { token: mintToken({ uid, usn: uid, exp: Date.now() / 1000 + 3600 }, key), guest: false, mode, map, loadout: { vehicle: 'razor', weapon } }), arena)
+  return page(
+    await join(socket, {
+      token: mintToken({ uid, usn: uid, exp: Date.now() / 1000 + 3600 }, key),
+      guest: false,
+      mode,
+      map,
+      loadout: { vehicle, weapon },
+    }),
+    arena,
+  )
 }
 
 export function page(link: Link, arena: Arena) {
@@ -40,7 +51,18 @@ export function page(link: Link, arena: Arena) {
     (name: string) =>
     (...args: unknown[]) =>
       void shown.push([name, ...args])
-  const events: SimEvents = { fired: record('fired'), shot: record('shot'), rocket: record('rocket'), burst: record('burst'), hurt: record('hurt'), wrecked: record('wrecked'), crashed: record('crashed'), reloading: record('reloading'), respawned: record('respawned'), recovered: record('recovered') }
+  const events: SimEvents = {
+    fired: record('fired'),
+    shot: record('shot'),
+    rocket: record('rocket'),
+    burst: record('burst'),
+    hurt: record('hurt'),
+    wrecked: record('wrecked'),
+    crashed: record('crashed'),
+    reloading: record('reloading'),
+    respawned: record('respawned'),
+    recovered: record('recovered'),
+  }
   const lines: string[] = []
   const feed: Feed = {
     me: seated.player.id,

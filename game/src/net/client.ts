@@ -1,19 +1,35 @@
 import RAPIER from '@dimforge/rapier3d-compat'
 import * as THREE from 'three'
-import type { Arena } from '../game/arena/arena'
-import { armWeapon, WEAPONS, type Shot } from '../game/combat'
-import type { Feed, MatchMode } from '../game/mode'
-import { MODES, type Mode } from '../game/modes'
-import { createWorld } from '../game/physics'
-import { enlist, type Combatant, type SimEvents } from '../game/simulation'
-import { forwardSpeed } from '../game/vehicle/drive'
-import { VEHICLES } from '../game/vehicle/vehicles'
-import type { Link } from './connection'
-import { createPrediction } from './prediction'
-import { blankCar, inputMessage, RATE, readCar, readMe, readStats, weaponId, type CarState, type ServerMessage, type Snapshot, type State, type Welcome, type WireEvent } from './protocol'
-import { createSnapshotBuffer } from './snapshots'
+import type { Arena } from '../content/arenas/arena.ts'
+import { armWeapon, type Shot } from '../sim/combat.ts'
+import { WEAPONS } from '../content/weapons/weapons.ts'
+import type { Feed, MatchMode } from '../sim/matchMode.ts'
+import { MODES } from '../modes/modes.ts'
+import type { Mode } from '../modes/ids.ts'
+import { createWorld } from '../sim/physics.ts'
+import { changeVehicle, enlist, type Combatant, type SimEvents } from '../sim/simulation.ts'
+import { forwardSpeed } from '../sim/drive.ts'
+import { VEHICLES } from '../content/vehicles/vehicles.ts'
+import type { Link } from './connection.ts'
+import { createPrediction } from './prediction.ts'
+import {
+  blankCar,
+  inputMessage,
+  RATE,
+  readCar,
+  readMe,
+  readStats,
+  weaponId,
+  type CarState,
+  type ServerMessage,
+  type Snapshot,
+  type State,
+  type Welcome,
+} from './protocol.ts'
+import { decode, NOW, owners, type GameEvent } from './events.ts'
+import { createSnapshotBuffer } from './snapshots.ts'
 
-// A browser's copy of an online match, free of the DOM (the headless checks
+// A browser's copy of an online match, free of the DOM (the headless tests
 // run it too): the line-up the server seated, in a local physics world, and
 // a local mode whose rules only ever mirror the server's — never ticked,
 // never asked to damage, kill or respawn anything. What the server sends is
@@ -33,16 +49,25 @@ const EASE = 0.035 // seconds: a correction's offset on screen falls to a third 
 // The match as the welcome describes it, built locally: every machine on
 // its seat's start — the others moved by the server's word alone
 // (kinematic), the player's own driven here too; an empty seat's out of
-// play — the mode on the same seed. `scene`: the browser's, for the mode's
-// own scenery.
-export function seatOnline(welcome: Welcome, arena: Arena, scene?: THREE.Scene) {
+// play — the mode on the same seed.
+export function seatOnline(welcome: Welcome, arena: Arena) {
   const kind = welcome.mode as Mode
   const world = createWorld(arena.colliders)
   const seats = MODES[kind].lineUp(arena, welcome.settings.size)
-  const combatants = welcome.lineUp.map((seat, id) => enlist(world, id, { name: seat.name, team: seat.team, seed: id + 1, spawn: seats[id].spawn, vehicle: seat.vehicle, weapon: WEAPONS[seat.weapon], bot: false }))
+  const combatants = welcome.lineUp.map((seat, id) =>
+    enlist(world, id, {
+      name: seat.name,
+      team: seat.team,
+      seed: id + 1,
+      spawn: seats[id].spawn,
+      vehicle: seat.vehicle,
+      weapon: WEAPONS[seat.weapon],
+      bot: false,
+    }),
+  )
   for (const c of combatants) if (c.id !== welcome.seat) c.car.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true)
   welcome.lineUp.forEach((seat, id) => seat.present || id === welcome.seat || present(combatants[id], false)) // the player's own seat is theirs, coming into play
-  const mode = MODES[kind].create({ combatants, arena, world, seed: welcome.seed, settings: welcome.settings, scene })
+  const mode = MODES[kind].create({ combatants, arena, world, seed: welcome.seed, settings: welcome.settings })
   return { kind, world, combatants, player: combatants[welcome.seat], mode }
 }
 
@@ -63,11 +88,9 @@ export interface ClientOptions {
   mode: MatchMode
   events: SimEvents // where the server's events are shown (the view; nothing headless)
   feed?: Feed // where the rules' events are announced
-  refit?: (c: Combatant) => void // a seat changed guns: its turret must change too
+  refit?: (c: Combatant) => void // a seat changed guns or vehicle: its model must change too
   restarted?: (seed: number) => void // the room started its next match
 }
-
-export type NetClient = ReturnType<typeof createNetClient>
 
 export function createNetClient({ link, world, combatants, player, mode, events, feed, refit, restarted }: ClientOptions) {
   const { rules } = mode
@@ -78,7 +101,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
   const uids = link.welcome.lineUp.map((seat) => seat.uid) // by seat: the person's user id, '' a bot's (chat's whispers)
   const shownWrecked = combatants.map(() => false) // what the view shows: a catch-up puts it right
   const net = { tick: link.welcome.tick, arrivedAt: -Infinity, drawn: 0, snapshots: 0, seq: 0, ack: -1, next: -1, hold: -1, lost: '' }
-  const later: WireEvent[] = [] // events waiting for the drawing to reach their tick
+  const later: GameEvent[] = [] // events waiting for the drawing to reach their tick
   let clockFloor = 0 // the rules' clock only runs forward, until the next match
   let serverNow = 0
   let lastTaken = -Infinity
@@ -125,33 +148,15 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     Object.assign(player.weapon, { ammo: me.ammo, reload: me.reload, cooldown: me.cooldown })
     player.stuck = me.stuck
     player.recovery = me.recovery
-    for (const event of s.ev) {
+    for (const row of s.ev) {
+      const event = decode(row)
+      if (!event) continue // a code this build doesn't know: nothing to play
       if (catchUp) play(event, true)
-      else if (event[0] === 'ru' || event[0] === 'go' || mine(event)) play(event, false)
+      else if (NOW.has(event.code) || owners(event).includes(player.id)) play(event, false)
       else later.push(event)
     }
     mode.report(feed)
     reconcile(latest[player.id], me)
-  }
-
-  // The player's own events show at once: a hit they take or land, a round
-  // they fire. The rest wait for the others to be drawn where they happened.
-  function mine([code, , ...f]: WireEvent) {
-    const me = player.id
-    switch (code) {
-      case 'sh':
-        return f[0] === me || f[11] === me
-      case 'hu':
-      case 'wr':
-        return f[0] === me || f[1] === me
-      case 'ln':
-      case 'cr':
-      case 'rl':
-      case 'sp':
-      case 'rc':
-        return f[0] === me
-    }
-    return false
   }
 
   // The server's word on the player's car against the prediction.
@@ -207,7 +212,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     net.hold = st.hold
   }
 
-  function roster({ seat, name, human, weapon, uid, present }: Extract<ServerMessage, { t: 'ro' }>) {
+  function roster({ seat, name, human, weapon, vehicle, uid, present }: Extract<ServerMessage, { t: 'ro' }>) {
     const c = combatants[seat]
     if (!c) return
     // people coming and going, in the feed (the player's own seat never changes hands)
@@ -215,9 +220,10 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     c.name = name
     humans[seat] = human
     uids[seat] = uid
-    if (weaponId(c.weapon.spec) === weapon) return
-    c.weapon = armWeapon(WEAPONS[weapon])
-    refit?.(c)
+    const regunned = weaponId(c.weapon.spec) !== weapon
+    if (regunned) c.weapon = armWeapon(WEAPONS[weapon])
+    // another vehicle: its body swapped in this page's world as on the server's (still the server's to move)
+    if (changeVehicle(world, c, vehicle) || regunned) refit?.(c)
   }
 
   // --- the server's events, into the local presenters -------------------------------------------------------
@@ -229,7 +235,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
   const shot: Shot = { point: new THREE.Vector3(), normal: new THREE.Vector3(), collider: null }
   let ground: RAPIER.Collider | null = null // something solid for a round that struck the arena (the view only asks whether it struck)
   world.forEachCollider((collider) => void (ground ??= collider))
-  const cm = (v: THREE.Vector3, x: unknown, y: unknown, z: unknown) => v.set((x as number) / 100, (y as number) / 100, (z as number) / 100)
+  const put = (v: THREE.Vector3, { x, y, z }: { x: number; y: number; z: number }) => v.set(x, y, z)
 
   // The player's rounds leave the gun where it's drawn (the car runs ahead of the server's).
   function fromOwnGun(toward: THREE.Vector3) {
@@ -239,61 +245,61 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     muzzle.addScaledVector(heading, barrel)
   }
 
-  function play([code, , ...f]: WireEvent, catchUp: boolean) {
-    const who = (i: number) => combatants[f[i] as number]
-    switch (code) {
+  // An event as decoded (events.ts). The player's own play at once (receive);
+  // the rest wait for the others to be drawn where they happened.
+  function play(event: GameEvent, catchUp: boolean) {
+    const who = (seat: number) => combatants[seat]
+    switch (event.code) {
       case 'ru':
-        return void rules.events.push(f[0])
-      case 'go': {
-        const seed = f[0] as number
+        return void rules.events.push(event.event)
+      case 'go':
         clockFloor = 0
         hard = true
         later.length = 0
-        mode.restart(seed)
-        return restarted?.(seed)
-      }
+        mode.restart(event.seed)
+        return restarted?.(event.seed)
       case 'wr':
-        if (!catchUp) show(who(0), true, who(1))
+        if (!catchUp) show(who(event.victim), true, who(event.attacker))
         return
       case 'sp':
-        if (who(0) === player) hard = true
-        if (!catchUp) show(who(0), false)
+        if (who(event.seat) === player) hard = true
+        if (!catchUp) show(who(event.seat), false)
         return
       case 'rc':
-        if (who(0) === player) hard = true
+        if (who(event.seat) === player) hard = true
         break
     }
     if (catchUp) return // the rest are effects: gone by now
-    switch (code) {
+    switch (event.code) {
       case 'sh': {
-        const shooter = who(0)
-        const victim = (f[11] as number) >= 0 ? who(11) : undefined
-        cm(muzzle, f[1], f[2], f[3])
-        cm(shot.point, f[4], f[5], f[6])
-        shot.normal.set((f[7] as number) / 100, (f[8] as number) / 100, (f[9] as number) / 100)
-        shot.collider = f[10] ? (victim?.car.body.collider(0) ?? ground) : null
+        const shooter = who(event.shooter)
+        const victim = event.victim >= 0 ? who(event.victim) : undefined
+        put(muzzle, event.muzzle)
+        put(shot.point, event.point)
+        put(shot.normal, event.normal)
+        shot.collider = event.struck ? (victim?.car.body.collider(0) ?? ground) : null
         if (shooter === player) fromOwnGun(heading.subVectors(shot.point, muzzle))
         else heading.subVectors(shot.point, muzzle).normalize()
         events.fired(shooter, muzzle, heading)
         return events.shot(shooter, muzzle, shot, victim)
       }
       case 'ln':
-        cm(muzzle, f[1], f[2], f[3])
-        heading.set((f[4] as number) / 1e4, (f[5] as number) / 1e4, (f[6] as number) / 1e4)
-        if (who(0) === player) fromOwnGun(heading)
-        return events.fired(who(0), muzzle, heading)
+        put(muzzle, event.muzzle)
+        put(heading, event.heading)
+        if (who(event.shooter) === player) fromOwnGun(heading)
+        return events.fired(who(event.shooter), muzzle, heading)
       case 'rk':
-        return events.rocket(cm(from, f[0], f[1], f[2]), cm(at, f[3], f[4], f[5]))
+        return events.rocket(put(from, event.from), put(at, event.to))
       case 'bu':
-        return events.burst(cm(at, f[0], f[1], f[2]))
+        return events.burst(put(at, event.at))
       case 'hu':
-        return events.hurt(who(0), who(1))
+        return events.hurt(who(event.victim), who(event.attacker))
       case 'cr':
-        return events.crashed(who(0), (f[1] as number) / 100, (f[2] as number) / 100, (f[3] as number) / 100)
+        return events.crashed(who(event.seat), event.x, event.z, event.force)
       case 'rl':
-        return events.reloading(who(0), f[1] === 1)
+        return events.reloading(who(event.seat), event.started)
       case 'rc':
-        return events.recovered(who(0))
+        return events.recovered(who(event.seat))
     }
   }
 
@@ -352,7 +358,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
       c.car.steer = car.steer
     }
     let played = false
-    while (later.length && (later[0][1] as number) <= tick) {
+    while (later.length && later[0].tick <= tick) {
       play(later.shift()!, false)
       played = true
     }
@@ -369,7 +375,14 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     const seq = ++net.seq
     link.send(inputMessage(seq, control, Math.round(net.drawn)))
     // driven as the server will read it: to the wire's hundredths
-    if (predicting) prediction.drive(seq, { throttle: Math.round(control.throttle * 100) / 100, steer: Math.round(control.steer * 100) / 100, handbrake: control.handbrake }, held(seq), mode.speedFactor(player.id), dt)
+    if (predicting)
+      prediction.drive(
+        seq,
+        { throttle: Math.round(control.throttle * 100) / 100, steer: Math.round(control.steer * 100) / 100, handbrake: control.handbrake },
+        held(seq),
+        mode.speedFactor(player.id),
+        dt,
+      )
     for (const c of combatants) {
       c.deadFor = c.alive ? 0 : c.deadFor + dt
       if ((c === player && predicting) || !c.present) continue

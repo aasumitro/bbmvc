@@ -10,13 +10,12 @@ import { blankCar, RATE, type CarState } from './protocol.ts'
 // snapshots arrive — the earliest-arriving of the last second, the least
 // delayed, sets it — and the drawing tick never runs backwards. The tick
 // shown is what the page tells the server it sees, for lag compensation.
-// (Imports carry .ts: no DOM, no bundler.)
 
 // Ticks behind the server: two snapshot intervals (67 ms). Every tick of it
 // is a tick the server's 200 ms of rewind (lag compensation) can't give back
 // to a player's aim, so it's as short as keeps a snapshot either side under
 // ordinary jitter; `extrapolated` counts the times it wasn't.
-export const DELAY = 4
+const DELAY = 4
 const EXTRAPOLATE = 15 // ticks past the newest snapshot a machine keeps moving (250 ms)
 const KEEP = 30 // snapshots kept (a second)
 const JUMP = 10 // metres between two snapshots that can't be driving (a respawn, a recovery): no drawing in between
@@ -26,8 +25,6 @@ interface Frame {
   tick: number
   cars: CarState[] // by machine id
 }
-
-export type SnapshotBuffer = ReturnType<typeof createSnapshotBuffer>
 
 export function createSnapshotBuffer(machines: number) {
   const frames: Frame[] = Array.from({ length: KEEP }, () => ({ tick: -1, cars: Array.from({ length: machines }, blankCar) }))

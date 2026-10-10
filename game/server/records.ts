@@ -2,7 +2,8 @@ import { createWriteStream, mkdirSync } from 'node:fs'
 import { appendFile, mkdir, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createGzip } from 'node:zlib'
-import type { MatchRecord, ReplayLine } from './room'
+import type { ReplayLine } from './journal.ts'
+import type { MatchRecord } from './room.ts'
 
 // What the server keeps of its matches, under MATCH_DIR: one JSON line per
 // match that ended (matches-YYYY-MM.jsonl, kept), and one replay per room
@@ -29,7 +30,9 @@ export function createRecords({ dir, days, log }: RecordsOptions) {
   async function prune() {
     const cutoff = day(Date.now() - days * 24 * 3600 * 1000)
     const folders = await readdir(replays).catch(() => [] as string[])
-    for (const folder of folders) if (/^\d{4}-\d{2}-\d{2}$/.test(folder) && folder < cutoff) await rm(join(replays, folder), { recursive: true, force: true }).catch(failed(`prune ${folder}`))
+    for (const folder of folders)
+      if (/^\d{4}-\d{2}-\d{2}$/.test(folder) && folder < cutoff)
+        await rm(join(replays, folder), { recursive: true, force: true }).catch(failed(`prune ${folder}`))
   }
   void prune()
   const daily = setInterval(() => void prune(), 24 * 3600 * 1000)

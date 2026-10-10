@@ -1,24 +1,26 @@
 import { useEffect, useState } from 'react'
-import { saveLoadout, savedLoadout, type Loadout } from './game/loadout'
-import { MAPS, type MapId } from './game/maps'
-import { MODES, type Mode } from './game/modes'
-import type { Link } from './net/connection'
-import { currentCustom, leaveMatch, onCustom, openInvite, resumeLobby } from './net/custom'
-import { currentSearch, findMatch, onSearch, resumeSearch, takeSeat } from './net/matchmaking'
-import { INVITE, readCode } from './net/protocol'
-import { GameCanvas } from './screens/GameCanvas'
-import { Garage } from './screens/Garage'
-import { Loading } from './screens/Loading'
-import { MainMenu } from './screens/MainMenu'
-import { MapSelect, type Pick } from './screens/MapSelect'
-import { Matchmaking } from './screens/Matchmaking'
+import { saveLoadout, savedLoadout } from './runtime/stored.ts'
+import type { Loadout } from './sim/loadout.ts'
+import { MAPS, type MapId } from './content/arenas/maps.ts'
+import { MODES } from './modes/modes.ts'
+import type { Mode } from './modes/ids.ts'
+import type { Link } from './net/connection.ts'
+import { currentCustom, leaveMatch, onCustom, openInvite, resumeLobby } from './net/lobbies.ts'
+import { currentSearch, findMatch, onSearch, resumeSearch, takeSeat } from './net/matchmaking.ts'
+import { INVITE, readCode } from './net/lobbyProtocol.ts'
+import { GameCanvas } from './screens/GameCanvas.tsx'
+import { Garage } from './screens/Garage.tsx'
+import { Loading } from './screens/Loading.tsx'
+import { MainMenu } from './screens/MainMenu.tsx'
+import { MapSelect, type Pick } from './screens/MapSelect.tsx'
+import { Matchmaking } from './screens/Matchmaking.tsx'
 
 // Menu -> garage (pick the loadout) -> map select (mode and arena) -> match; the match exits back to the garage.
 // Classic's Find Match searches from the map select and keeps searching on
 // every screen; the match found shows over whatever is up (Matchmaking), and
 // once the server has seated the player, the game goes into that match from
 // wherever it is — a practice match ends there. A custom lobby's match
-// (net/custom.ts) goes the same way, and once it's over for the player they
+// (net/lobbies.ts) goes the same way, and once it's over for the player they
 // are back on the arena screen's Custom entry: its waiting room (the list,
 // if they were kicked; the way back in, after a drop). An invite link
 // (?join=CODE) opens that entry and joins; a reload in a lobby goes back in.
@@ -35,7 +37,12 @@ function App() {
   function play(found: Link) {
     const { mode, map } = found.welcome
     setSeat(found)
-    setPick((last) => ({ ...last, online: true, mode: Object.hasOwn(MODES, mode) ? (mode as Mode) : last.mode, map: Object.hasOwn(MAPS, map) ? (map as MapId) : last.map }))
+    setPick((last) => ({
+      ...last,
+      online: true,
+      mode: Object.hasOwn(MODES, mode) ? (mode as Mode) : last.mode,
+      map: Object.hasOwn(MAPS, map) ? (map as MapId) : last.map,
+    }))
     setRun((n) => n + 1)
     setScreen('game')
   }
@@ -85,7 +92,8 @@ function App() {
         }}
       />
     )
-  else if (screen === 'garage') content = <Garage loadout={loadout} onLoadout={changeLoadout} onBack={() => setScreen('menu')} onSelect={() => setScreen('map-select')} />
+  else if (screen === 'garage')
+    content = <Garage loadout={loadout} onLoadout={changeLoadout} onBack={() => setScreen('menu')} onSelect={() => setScreen('map-select')} />
   else if (screen === 'map-select')
     content = (
       <MapSelect

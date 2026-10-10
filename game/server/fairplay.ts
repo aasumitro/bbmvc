@@ -12,7 +12,7 @@
 // Each is counted over a person's time in a seat; past its threshold it
 // flags them. Nothing acts on a flag: the match record and the replay are
 // there for a person to look at. Pure: the room gives positions and a sight
-// test (plain node: fairplay.check.ts).
+// test (fairplay.test.ts).
 
 export const FAIRPLAY = {
   body: 0.9, // metres: an aim point this close to where lock-on aims (1 m over the hostile's wheels) is on it
@@ -23,14 +23,14 @@ export const FAIRPLAY = {
   flags: { hidden: 30, snaps: 8, quick: 10, quickShare: 0.6 }, // hidden: steps; quickShare: of the trigger pulls onto a hostile
 }
 
-export interface Point {
+export interface Vector {
   x: number
   y: number
   z: number
 }
 
 // A hostile as the shooter's page drew it (the tick it saw).
-export interface Target extends Point {
+export interface Target extends Vector {
   id: number
 }
 
@@ -49,35 +49,41 @@ export type FairFlag = 'hidden' | 'snaps' | 'quick'
 
 const blank = (): FairTally => ({ steps: 0, firing: 0, onTarget: 0, hidden: 0, snaps: 0, pulls: 0, quick: 0, hits: 0 })
 
-export type FairPlay = ReturnType<typeof createFairPlay>
-
 export function createFairPlay(seats: number) {
   const tallies = Array.from({ length: seats }, blank)
   const state = Array.from({ length: seats }, () => ({
-    headings: [] as Point[], // the aim's direction the last two steps, newest last
+    headings: [] as Vector[], // the aim's direction the last two steps, newest last
     target: -1, // the hostile the aim is on, -1 none
     since: 0, // the step the aim reached it
     firing: false,
     snap: null as { target: number; until: number } | null, // a snap waiting for its hit
   }))
-  const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
-  const unit = (from: Point, to: Point): Point => {
+  const distance = (a: Vector, b: Vector) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+  const unit = (from: Vector, to: Vector): Vector => {
     const d = distance(from, to) || 1
     return { x: (to.x - from.x) / d, y: (to.y - from.y) / d, z: (to.z - from.z) / d }
   }
-  const degrees = (a: Point, b: Point) => (Math.acos(Math.min(1, Math.max(-1, a.x * b.x + a.y * b.y + a.z * b.z))) * 180) / Math.PI
+  const degrees = (a: Vector, b: Vector) => (Math.acos(Math.min(1, Math.max(-1, a.x * b.x + a.y * b.y + a.z * b.z))) * 180) / Math.PI
 
   return {
     // One step of a person's driving. `eyes`: where their page could see
     // from (the car's roof, the chase camera); `targets`: the hostiles as
     // their page drew them; `sees`: a clear line through the arena.
-    observe(seat: number, tick: number, eyes: readonly Point[], aim: Point, fire: boolean, targets: readonly Target[], sees: (from: Point, to: Point) => boolean) {
+    observe(
+      seat: number,
+      tick: number,
+      eyes: readonly Vector[],
+      aim: Vector,
+      fire: boolean,
+      targets: readonly Target[],
+      sees: (from: Vector, to: Vector) => boolean,
+    ) {
       const t = tallies[seat]
       const s = state[seat]
       t.steps++
       if (fire) t.firing++
       let on = -1
-      let at: Point | null = null
+      let at: Vector | null = null
       for (const target of targets) {
         const centre = { x: target.x, y: target.y + FAIRPLAY.lift, z: target.z }
         if (distance(aim, centre) > FAIRPLAY.body) continue

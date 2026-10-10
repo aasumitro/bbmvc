@@ -25,9 +25,10 @@ window.ffaMetrics = (() => {
   const effectsOn = (c, now) => ({ damage: c.effects.damage > now, armor: c.effects.armor > now, speed: c.effects.speed > now, repair: c.effects.repair > now })
 
   M.setup = async () => {
-    M.ai = await import('/src/game/ai.ts')
-    M.combat = await import('/src/game/combat.ts')
-    M.cfg = (await import('/src/game/ffa/config.ts')).FFA
+    M.ai = await import('/src/sim/ai/brain.ts')
+    M.combat = await import('/src/sim/combat.ts')
+    M.weapons = await import('/src/content/weapons/weapons.ts')
+    M.cfg = (await import('/src/modes/ffa/config.ts')).FFA
     const m = window.match
     const { combatants: C, chase: view } = m
     const ffa = m.mode.kind === 'ffa' ? m.mode.rules : null
@@ -200,7 +201,7 @@ window.ffaMetrics = (() => {
     const m = window.match, p = m.player
     M.auto = mode ? { mode, style } : null
     p.brain = mode ? M.ai.createBrain(p.seed) : undefined // the simulation thinks for any machine with a brain
-    p.weapon = M.combat.armWeapon(mode === 'even' ? m.others[0].weapon.spec : M.combat.WEAPONS.minigun)
+    p.weapon = M.combat.armWeapon(mode === 'even' ? m.others[0].weapon.spec : M.weapons.WEAPONS.minigun)
   }
 
   function newRun(label) {

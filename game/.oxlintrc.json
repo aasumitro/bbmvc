@@ -1,8 +1,425 @@
 {
+  // Lint holds the layers (.claude/work/arch/MODULE_BOUNDARIES.md): a module imports from its own
+  // level or a lower one. A file two overrides match takes the later one's options whole.
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
+  "plugins": ["react", "typescript", "oxc", "import"],
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    "import/no-cycle": ["error", { "ignoreTypes": false }],
+    "import/extensions": ["error", "always", { "ignorePackages": true }]
+  },
+  "overrides": [
+    // Level 0: shared/ (pure, used by two layers or more) and render/.
+    {
+      "files": ["src/shared/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/screens/**",
+                  "**/hud/**",
+                  "**/*.tsx",
+                  "**/runtime/**",
+                  "**/view/**",
+                  "**/modes/**",
+                  "**/net/**",
+                  "**/sim/**",
+                  "**/content/**",
+                  "**/render/**",
+                  "react",
+                  "react-dom",
+                  "three/examples/**",
+                  "!**/modes/ids.ts"
+                ],
+                "message": "shared/ is level 0 and pure: it imports no other layer, no React, no rendering (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/render/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/screens/**",
+                  "**/hud/**",
+                  "**/*.tsx",
+                  "**/runtime/**",
+                  "**/view/**",
+                  "**/modes/**",
+                  "**/net/**",
+                  "**/sim/**",
+                  "**/content/**",
+                  "!**/modes/ids.ts"
+                ],
+                "message": "render/ is level 0: it knows no content, simulation, mode, view or page (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 1: content/ (vehicles, arenas: data and builders).
+    {
+      "files": ["src/content/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/screens/**", "**/hud/**", "**/*.tsx", "**/runtime/**", "**/view/**", "**/modes/**", "**/net/**", "**/sim/**", "!**/modes/ids.ts"],
+                "message": "content/ is level 1: it imports render/ and shared/ only (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 2: sim/, the authoritative simulation; pure.
+    {
+      "files": ["src/sim/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/screens/**",
+                  "**/hud/**",
+                  "**/*.tsx",
+                  "**/runtime/**",
+                  "**/view/**",
+                  "**/modes/**",
+                  "**/net/**",
+                  "**/render/**",
+                  "react",
+                  "react-dom",
+                  "three/examples/**",
+                  "!**/modes/ids.ts"
+                ],
+                "message": "sim/ is level 2 and pure: no modes, view, net, runtime, React or rendering (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 3: modes/ (domain: rules, adapters, settings), pure.
+    {
+      "files": ["src/modes/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/screens/**",
+                  "**/hud/**",
+                  "**/*.tsx",
+                  "**/views.ts",
+                  "**/runtime/**",
+                  "**/view/**",
+                  "**/net/connection.ts",
+                  "**/net/client.ts",
+                  "**/net/prediction.ts",
+                  "**/net/snapshots.ts",
+                  "**/net/sessionSocket.ts",
+                  "**/net/matchmaking.ts",
+                  "**/net/lobbies.ts",
+                  "**/net/session.ts",
+                  "**/net/chat.ts",
+                  "**/net/chatCommand.ts",
+                  "**/pickups.ts",
+                  "**/zone.ts",
+                  "**/scenery.ts",
+                  "**/render/**",
+                  "react",
+                  "react-dom",
+                  "three/examples/**"
+                ],
+                "message": "a mode's domain is level 3 and pure: no view, page net, runtime, React or rendering (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 4: a mode's 3-D view.
+    {
+      "files": ["src/modes/items/pickups.ts", "src/modes/ffa/zone.ts", "src/modes/scenery.ts"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/screens/**", "**/hud/**", "**/*.tsx", "**/views.ts", "**/runtime/**"],
+                "message": "a mode's view is level 4: no runtime or screens (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 4: the page's side of net/.
+    {
+      "files": ["src/net/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/screens/**", "**/hud/**", "**/*.tsx", "**/views.ts", "**/runtime/**"],
+                "message": "net/ is level 4: no runtime or screens (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 3: the wire, server-safe (after the net/** entry, so it wins for these files).
+    {
+      "files": ["src/net/protocol.ts", "src/net/lobbyProtocol.ts", "src/net/lobbyRules.ts", "src/net/events.ts", "src/net/limits.ts"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/screens/**",
+                  "**/hud/**",
+                  "**/*.tsx",
+                  "**/views.ts",
+                  "**/runtime/**",
+                  "**/view/**",
+                  "**/net/connection.ts",
+                  "**/net/client.ts",
+                  "**/net/prediction.ts",
+                  "**/net/snapshots.ts",
+                  "**/net/sessionSocket.ts",
+                  "**/net/matchmaking.ts",
+                  "**/net/lobbies.ts",
+                  "**/net/session.ts",
+                  "**/net/chat.ts",
+                  "**/net/chatCommand.ts",
+                  "**/pickups.ts",
+                  "**/zone.ts",
+                  "**/scenery.ts",
+                  "**/connection.ts",
+                  "**/client.ts",
+                  "**/prediction.ts",
+                  "**/snapshots.ts",
+                  "**/sessionSocket.ts",
+                  "**/matchmaking.ts",
+                  "**/lobbies.ts",
+                  "**/session.ts",
+                  "**/chat.ts",
+                  "**/chatCommand.ts"
+                ],
+                "message": "the wire is level 3 and server-safe: no page modules (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 4: view/, the match as the player sees and hears it.
+    {
+      "files": ["src/view/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/screens/**", "**/hud/**", "**/*.tsx", "**/views.ts", "**/runtime/**"],
+                "message": "view/ is level 4: no runtime or screens (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 5: runtime/.
+    {
+      "files": ["src/runtime/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/screens/**", "**/hud/**", "**/*.tsx", "**/views.ts"],
+                "message": "runtime/ is level 5: the screens drive it, not the other way round (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Level 6: the screens, the HUD and the modes' panels read the match, never the physics world.
+    {
+      "files": ["src/screens/**", "src/hud/**", "src/modes/views.ts", "src/modes/**/*.tsx"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@dimforge/rapier3d-compat",
+                "message": "the UI reads the match, never the physics world (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["**/sim/physics.ts"],
+                "message": "the UI reads the match, never the physics world (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              },
+              {
+                "group": ["**/sim/simulation.ts"],
+                "allowTypeImports": true,
+                "message": "the UI may name the simulation's types, not run it (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // The game server: levels 0-3 and itself. browser.ts and the tests play pages on purpose.
+    {
+      "files": ["server/**"],
+      "excludeFiles": ["server/browser.ts", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "react",
+                "message": "the game server runs no page (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              },
+              {
+                "name": "react-dom",
+                "message": "the game server runs no page (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              },
+              {
+                "name": "@heroiclabs/nakama-js",
+                "message": "the game server runs no page (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "**/screens/**",
+                  "**/hud/**",
+                  "**/*.tsx",
+                  "**/views.ts",
+                  "**/runtime/**",
+                  "**/view/**",
+                  "**/net/connection.ts",
+                  "**/net/client.ts",
+                  "**/net/prediction.ts",
+                  "**/net/snapshots.ts",
+                  "**/net/sessionSocket.ts",
+                  "**/net/matchmaking.ts",
+                  "**/net/lobbies.ts",
+                  "**/net/session.ts",
+                  "**/net/chat.ts",
+                  "**/net/chatCommand.ts",
+                  "**/pickups.ts",
+                  "**/zone.ts",
+                  "**/scenery.ts"
+                ],
+                "message": "the game server imports levels 0-3 and itself (.claude/work/arch/MODULE_BOUNDARIES.md)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Purity: sim/, shared/ and the modes' domain. Randomness from the match seed, time from the step, no DOM.
+    {
+      "files": ["src/sim/**", "src/shared/**", "src/modes/**"],
+      "excludeFiles": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "src/modes/**/*.tsx",
+        "src/modes/views.ts",
+        "src/modes/scenery.ts",
+        "src/modes/items/pickups.ts",
+        "src/modes/ffa/zone.ts"
+      ],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "Math",
+            "property": "random",
+            "message": "gameplay randomness comes from the match seed (shared/rng.ts)"
+          },
+          {
+            "object": "Date",
+            "property": "now",
+            "message": "gameplay time is the fixed step, never the wall clock"
+          },
+          {
+            "object": "performance",
+            "property": "now",
+            "message": "gameplay time is the fixed step, never the wall clock"
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "window",
+            "message": "gameplay code runs headless: no DOM, no storage"
+          },
+          {
+            "name": "document",
+            "message": "gameplay code runs headless: no DOM, no storage"
+          },
+          {
+            "name": "localStorage",
+            "message": "gameplay code runs headless: no DOM, no storage"
+          },
+          {
+            "name": "sessionStorage",
+            "message": "gameplay code runs headless: no DOM, no storage"
+          }
+        ]
+      }
+    },
+    // Tests: Vitest's rules.
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "plugins": ["vitest"],
+      "rules": {}
+    }
+  ]
 }

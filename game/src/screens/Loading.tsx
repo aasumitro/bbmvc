@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { runTasks, STARTUP, type Progress, type Task } from '../game/loading'
-import { ActionButton } from './Menu'
+import { runTasks, STARTUP, type Progress, type Task } from '../runtime/loading.ts'
+import { ActionButton } from './Menu.tsx'
 
 interface LoadingProps {
   onDone: () => void
 }
 
-// The first screen. It stays up while the startup tasks (game/loading.ts)
+// The first screen. It stays up while the startup tasks (runtime/loading.ts)
 // run: the bar is the share of them finished, the line under it the one
 // running. The menu opens when the last one finishes. A failure stops it
 // there and says what failed; Retry (Enter) runs the list again.
@@ -58,21 +58,15 @@ export function Loading({ onDone }: LoadingProps) {
       style={{ backgroundImage: `url('${import.meta.env.BASE_URL}bg/loading.jpg')` }}
     >
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="relative text-red-500">
-        <path
-          d="M12 2 L14 9 L21 9 L15.5 13.5 L17.5 21 L12 16.5 L6.5 21 L8.5 13.5 L3 9 L10 9 Z"
-          stroke="currentColor"
-          strokeWidth="1"
-        />
+        <path d="M12 2 L14 9 L21 9 L15.5 13.5 L17.5 21 L12 16.5 L6.5 21 L8.5 13.5 L3 9 L10 9 Z" stroke="currentColor" strokeWidth="1" />
       </svg>
 
       <div className="relative text-center">
-        <h1 className="m-0 font-display text-6xl font-semibold tracking-[0.05em] drop-shadow-[0_0_32px_rgba(220,38,38,0.5)] sm:text-7xl">
-          Scrapyard
-        </h1>
+        <h1 className="m-0 font-display text-6xl font-semibold tracking-wider drop-shadow-[0_0_32px_rgba(220,38,38,0.5)] sm:text-7xl">Scrapyard</h1>
         <p className="mt-3 font-display text-lg text-red-400/90 italic">Car Battle</p>
       </div>
 
-      <div className="relative w-[70vw] max-w-[420px]">
+      <div className="relative w-[70vw] max-w-105">
         <div
           role="progressbar"
           aria-label="Loading"
@@ -83,7 +77,7 @@ export function Loading({ onDone }: LoadingProps) {
           className="h-px overflow-hidden bg-white/15"
         >
           <div
-            className="h-full bg-gradient-to-r from-red-700 via-red-500 to-orange-400 shadow-[0_0_10px_rgba(239,68,68,0.8)] transition-[width] duration-150 ease-linear"
+            className="h-full bg-linear-to-r from-red-700 via-red-500 to-orange-400 shadow-[0_0_10px_rgba(239,68,68,0.8)] transition-[width] duration-150 ease-linear"
             style={{ width: `${(progress.done / progress.total) * 100}%` }}
           />
         </div>

@@ -3,7 +3,7 @@
 // context takes every call and draws nothing. The builders run unchanged, so
 // every call happens in the same order and their seeded streams draw the
 // same numbers: the layout comes out as the browser's. Defines `document`
-// only — no `window` — which is how materials/library.ts knows to skip the
+// only — no `window` — which is how render/materials/library.ts knows to skip the
 // GPU bake. Imported first by anything on the server that builds an arena.
 
 interface Anything {
@@ -27,7 +27,9 @@ function context2d(canvas: object) {
       if (key in target) return target[key]
       if (key === 'measureText') return () => ({ width: 0 })
       if (key === 'getImageData') return (_x: number, _y: number, width: number, height: number) => pixels(width, height)
-      if (key === 'createImageData') return (width: number | { width: number; height: number }, height?: number) => (typeof width === 'number' ? pixels(width, height ?? 0) : pixels(width.width, width.height))
+      if (key === 'createImageData')
+        return (width: number | { width: number; height: number }, height?: number) =>
+          typeof width === 'number' ? pixels(width, height ?? 0) : pixels(width.width, width.height)
       return () => dummy
     },
     set(target, key, value) {

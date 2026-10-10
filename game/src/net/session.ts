@@ -115,7 +115,14 @@ function goOnline(session: Session, wait = 5) {
     if (retrying) return
     retrying = true
     const next = connected ? 5 : Math.min(wait * 2, 60)
-    setTimeout(() => signIn().then(({ session }) => goOnline(session, next), () => goOnline(session, next)), (connected ? 5 : wait) * 1000)
+    setTimeout(
+      () =>
+        signIn().then(
+          ({ session }) => goOnline(session, next),
+          () => goOnline(session, next),
+        ),
+      (connected ? 5 : wait) * 1000,
+    )
   }
   socket.ondisconnect = retry
   socket

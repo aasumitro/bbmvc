@@ -4,7 +4,7 @@
 // `/unmute name`), or a note the page answers itself (help, a name nobody
 // has, nothing to say). A name is anyone's whole name, case aside, or the
 // start of just one; names may have spaces ("Guest ab12"): the longest run of
-// words that names someone does. Pure (plain node: chat.check.ts).
+// words that names someone does. Pure (chatCommand.test.ts).
 
 export const CHAT_LIMIT = 200 // characters a message may have (nakama/data/modules/chat.lua holds everyone to it)
 
@@ -13,7 +13,7 @@ export interface Person {
   name: string
 }
 
-export type ChatIntent =
+type ChatIntent =
   | { do: 'say'; text: string }
   | { do: 'whisper'; to: Person; text: string }
   | { do: 'reply'; text: string }
@@ -51,7 +51,7 @@ export function readChat(typed: string, people: readonly Person[]): ChatIntent |
 }
 
 // Someone by their whole name, case aside, else by the start of just one name.
-export function named(query: string, people: readonly Person[]) {
+function named(query: string, people: readonly Person[]) {
   const q = query.toLowerCase()
   const exact = people.find((p) => p.name.toLowerCase() === q)
   if (exact) return exact

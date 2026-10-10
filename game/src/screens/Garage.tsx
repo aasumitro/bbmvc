@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { sustainedDps, WEAPONS, type WeaponId, type WeaponSpec } from '../game/combat'
-import { MENU_BACKDROP } from '../game/loading'
-import type { Loadout } from '../game/loadout'
-import { createTurntable } from '../game/turntable'
-import { drivePerformance } from '../game/vehicle/drive'
-import { VEHICLES, type VehicleSpec } from '../game/vehicle/vehicles'
-import { ActionButton, Menu, Pager } from './Menu'
+import { sustainedDps, WEAPONS, type WeaponId, type WeaponKind, type WeaponSpec } from '../content/weapons/weapons.ts'
+import { MENU_BACKDROP } from '../runtime/loading.ts'
+import type { Loadout } from '../sim/loadout.ts'
+import { createTurntable } from '../view/turntable.ts'
+import { drivePerformance } from '../sim/drive.ts'
+import { VEHICLES, type VehicleId, type VehicleSpec } from '../content/vehicles/vehicles.ts'
+import { ActionButton, Menu, Pager } from './Menu.tsx'
 
 interface GarageProps {
   loadout: Loadout
@@ -42,19 +42,33 @@ function vehicleSpecs({ handling, chassis, armour }: VehicleSpec): Spec[] {
   ]
 }
 const WEAPON_IDS = Object.keys(WEAPONS) as WeaponId[]
+const VEHICLE_IDS = Object.keys(VEHICLES) as VehicleId[]
+const FLEET = VEHICLE_IDS.length > 1 // a vehicle pager once there's a choice
 
-const weaponSpecs = (w: WeaponSpec): Spec[] => [
-  ['Damage', `${w.damage} per ${w.rocket ? 'rocket' : 'round'}`],
-  ['Rate of fire', `${Math.round(w.fireRate * 60)} rpm`],
-  ['Magazine', `${w.magazine} ${w.rocket ? 'rockets' : 'rounds'}`],
-  ['Reload', `${w.reloadTime.toFixed(1)} s`],
-  ['Range', `${w.range} m`],
-  ...(w.rocket
-    ? ([
+// The id `step` places on from `at` in a registry's ids, round past either end.
+const turn = <K extends string>(ids: K[], at: K, step: number) => ids[(ids.indexOf(at) + step + ids.length) % ids.length]
+
+// By how the weapon fires: what a round is called (one, many), and the rows only that kind has.
+const ROUND: Record<WeaponKind, [string, string]> = { gun: ['round', 'rounds'], rocket: ['rocket', 'rockets'] }
+function kindSpecs(w: WeaponSpec): Spec[] {
+  switch (w.kind) {
+    case 'gun':
+      return []
+    case 'rocket':
+      return [
         ['Rocket speed', `${w.rocket.speed} m/s`],
         ['Blast radius', `${w.rocket.blast} m`],
-      ] satisfies Spec[])
-    : []),
+      ]
+  }
+}
+
+const weaponSpecs = (w: WeaponSpec): Spec[] => [
+  ['Damage', `${w.damage} per ${ROUND[w.kind][0]}`],
+  ['Rate of fire', `${Math.round(w.fireRate * 60)} rpm`],
+  ['Magazine', `${w.magazine} ${ROUND[w.kind][1]}`],
+  ['Reload', `${w.reloadTime.toFixed(1)} s`],
+  ['Range', `${w.range} m`],
+  ...kindSpecs(w),
   ['Firepower', `${Math.round(sustainedDps(w))} dmg/s`], // over whole magazines, reloads included
 ]
 
@@ -73,7 +87,7 @@ function SpecSheet({ specs }: { specs: Spec[] }) {
   )
 }
 
-// The car on its turntable (game/turntable.ts), mounted once and rebuilt when the loadout changes it.
+// The car on its turntable (view/turntable.ts), mounted once and rebuilt when the loadout changes it.
 function Turntable({ loadout }: { loadout: Loadout }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const stage = useRef<ReturnType<typeof createTurntable>>(null)
@@ -85,7 +99,7 @@ function Turntable({ loadout }: { loadout: Loadout }) {
       turntable.dispose()
     }
   }, [])
-  useEffect(() => stage.current?.show(loadout.vehicle, WEAPONS[loadout.weapon].model), [loadout])
+  useEffect(() => stage.current?.show(loadout.vehicle, WEAPONS[loadout.weapon].turret), [loadout])
   return <div ref={containerRef} className="fixed inset-0" />
 }
 
@@ -95,14 +109,17 @@ export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
   const vehicle = VEHICLES[loadout.vehicle]
   const weapon = WEAPONS[loadout.weapon]
   const place = WEAPON_IDS.indexOf(loadout.weapon)
-  const cycle = (step: number) => onLoadout({ ...loadout, weapon: WEAPON_IDS[(place + step + WEAPON_IDS.length) % WEAPON_IDS.length] })
+  const cycle = (step: number) => onLoadout({ ...loadout, weapon: turn(WEAPON_IDS, loadout.weapon, step) })
+  const swap = (step: number) => onLoadout({ ...loadout, vehicle: turn(VEHICLE_IDS, loadout.vehicle, step) })
+  // What ←→ pages through: the weapons on the loadout page, the vehicles on the vehicle page.
+  const pages = showLoadout ? cycle : FLEET && NAV_ITEMS[selected].label === 'Vehicle' ? swap : undefined
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'ArrowDown') setSelected((i) => (i + 1) % NAV_ITEMS.length)
       if (e.key === 'ArrowUp') setSelected((i) => (i - 1 + NAV_ITEMS.length) % NAV_ITEMS.length)
-      if (showLoadout && e.key === 'ArrowLeft') cycle(-1)
-      if (showLoadout && e.key === 'ArrowRight') cycle(1)
+      if (e.key === 'ArrowLeft') pages?.(-1)
+      if (e.key === 'ArrowRight') pages?.(1)
       if (e.key === 'Enter') {
         e.preventDefault() // no second press through a focused button
         ;(NAV_ITEMS[selected].label === 'Back' ? onBack : onSelect)()
@@ -123,11 +140,17 @@ export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
       <Turntable loadout={loadout} />
 
       <div className="pointer-events-none absolute top-8 left-[6vw]">
-        <h1 className="m-0 font-display text-6xl font-semibold tracking-[0.05em]">Garage</h1>
+        <h1 className="m-0 font-display text-6xl font-semibold tracking-wider">Garage</h1>
         <p className="mt-1 font-display text-lg text-red-400/90 italic">Your machine</p>
       </div>
 
-      <Menu items={NAV_ITEMS} selected={selected} onSelect={setSelected} onActivate={(i) => (NAV_ITEMS[i].label === 'Back' ? onBack() : setSelected(i))} className="absolute top-40 left-[6vw]" />
+      <Menu
+        items={NAV_ITEMS}
+        selected={selected}
+        onSelect={setSelected}
+        onActivate={(i) => (NAV_ITEMS[i].label === 'Back' ? onBack() : setSelected(i))}
+        className="absolute top-40 left-[6vw]"
+      />
 
       {showLoadout ? (
         <div className="pointer-events-none absolute top-8 right-[4vw] w-80 text-right">
@@ -148,20 +171,28 @@ export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
       ) : (
         <div className="pointer-events-none absolute top-8 right-[4vw] w-80 text-right">
           <h2 className="m-0 font-display text-4xl font-semibold">{vehicle.name}</h2>
-          <p className="mt-1 text-xs tracking-[0.2em] text-neutral-400 uppercase">{vehicle.kind}</p>
+          <p className="mt-1 text-xs tracking-[0.2em] text-neutral-400 uppercase">
+            {vehicle.kind}
+            {FLEET && ` · ${VEHICLE_IDS.indexOf(loadout.vehicle) + 1} / ${VEHICLE_IDS.length}`}
+          </p>
+          {FLEET && (
+            <div className="pointer-events-auto mt-5 flex justify-end">
+              <Pager what="vehicle" onStep={swap} />
+            </div>
+          )}
           <SpecSheet specs={vehicleSpecs(vehicle)} />
           <p className="mt-6 text-right font-display text-sm text-neutral-300 italic">{vehicle.blurb}</p>
           {select}
         </div>
       )}
 
-      <div className="absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-[0.1em] text-neutral-400 uppercase">
+      <div className="absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-widest text-neutral-400 uppercase">
         <span className={keycap}>&uarr;&darr;</span>
         <span>Choose</span>
-        {showLoadout && (
+        {pages && (
           <>
             <span className={keycap}>&larr;&rarr;</span>
-            <span>Weapon</span>
+            <span>{showLoadout ? 'Weapon' : 'Vehicle'}</span>
           </>
         )}
         <span className={keycap}>Enter</span>

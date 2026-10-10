@@ -1,15 +1,15 @@
 import * as THREE from 'three'
-import type { SimEvents } from '../src/game/simulation'
-import { cm, q4, type WireEvent } from '../src/net/protocol'
+import type { SimEvents } from '../src/sim/simulation.ts'
+import { encode } from '../src/net/events.ts'
+import type { WireEvent } from '../src/net/protocol.ts'
 
 // A room's SimEvents: everything the simulation reports mid-step, written
 // down as wire events ([code, tick, ...], NET_PLAN.md §4) until the next
 // snapshot takes them. Each browser plays them back into its own view. A
 // rocket reports every step of its flight; those come out joined, one
 // segment per rocket per snapshot — a step's `from` is the same numbers as
-// the step before's `to`, so the pieces are matched exactly.
-
-const xyz = (v: THREE.Vector3) => [cm(v.x), cm(v.y), cm(v.z)]
+// the step before's `to`, so the pieces are matched exactly. Each event is
+// encoded by net/events.ts.
 
 export function createRecorder(tick: () => number) {
   let events: WireEvent[] = []
@@ -17,12 +17,20 @@ export function createRecorder(tick: () => number) {
 
   const sim: SimEvents = {
     fired(c, muzzle, heading) {
-      // a hitscan round is written whole when it lands (`shot`)
-      if (c.weapon.spec.rocket) events.push(['ln', tick(), c.id, ...xyz(muzzle), q4(heading.x), q4(heading.y), q4(heading.z)])
+      const { spec } = c.weapon
+      switch (spec.kind) {
+        case 'gun':
+          return // a hitscan round is written whole when it lands (`shot`)
+        case 'rocket':
+          events.push(encode({ code: 'ln', tick: tick(), shooter: c.id, muzzle, heading }))
+          return
+        default:
+          return spec satisfies never
+      }
     },
     shot(c, muzzle, shot, victim) {
       const { point, normal } = shot
-      events.push(['sh', tick(), c.id, ...xyz(muzzle), ...xyz(point), Math.round(normal.x * 100), Math.round(normal.y * 100), Math.round(normal.z * 100), shot.collider ? 1 : 0, victim?.id ?? -1])
+      events.push(encode({ code: 'sh', tick: tick(), shooter: c.id, muzzle, point, normal, struck: !!shot.collider, victim: victim?.id ?? -1 }))
     },
     rocket(from, to) {
       const flight = flights.find((f) => f.to.equals(from))
@@ -30,25 +38,25 @@ export function createRecorder(tick: () => number) {
       else flights.push({ tick: tick(), from: from.clone(), to: to.clone() })
     },
     burst(at) {
-      events.push(['bu', tick(), ...xyz(at)])
+      events.push(encode({ code: 'bu', tick: tick(), at }))
     },
     hurt(victim, attacker) {
-      events.push(['hu', tick(), victim.id, attacker.id])
+      events.push(encode({ code: 'hu', tick: tick(), victim: victim.id, attacker: attacker.id }))
     },
     wrecked(victim, attacker) {
-      events.push(['wr', tick(), victim.id, attacker.id])
+      events.push(encode({ code: 'wr', tick: tick(), victim: victim.id, attacker: attacker.id }))
     },
     crashed(c, x, z, force) {
-      events.push(['cr', tick(), c.id, Math.round(x * 100), Math.round(z * 100), Math.round(force * 100)])
+      events.push(encode({ code: 'cr', tick: tick(), seat: c.id, x, z, force }))
     },
     reloading(c, started) {
-      events.push(['rl', tick(), c.id, started ? 1 : 0])
+      events.push(encode({ code: 'rl', tick: tick(), seat: c.id, started }))
     },
     respawned(c) {
-      events.push(['sp', tick(), c.id])
+      events.push(encode({ code: 'sp', tick: tick(), seat: c.id }))
     },
     recovered(c) {
-      events.push(['rc', tick(), c.id])
+      events.push(encode({ code: 'rc', tick: tick(), seat: c.id }))
     },
   }
 
@@ -56,15 +64,15 @@ export function createRecorder(tick: () => number) {
     sim,
     // The mode's own events, raw: each browser's adapter announces them for its player.
     rules(list: readonly unknown[]) {
-      for (const event of list) events.push(['ru', tick(), event])
+      for (const event of list) events.push(encode({ code: 'ru', tick: tick(), event }))
     },
     // The room starts its next match on `seed`.
     restart(seed: number) {
-      events.push(['go', tick(), seed])
+      events.push(encode({ code: 'go', tick: tick(), seed }))
     },
     // Everything since the last call, rocket flights last; then starts over.
     drain() {
-      for (const { tick, from, to } of flights) events.push(['rk', tick, ...xyz(from), ...xyz(to)])
+      for (const { tick, from, to } of flights) events.push(encode({ code: 'rk', tick, from, to }))
       flights.length = 0
       const taken = events
       events = []
