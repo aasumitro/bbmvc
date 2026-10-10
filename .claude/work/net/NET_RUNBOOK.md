@@ -1,7 +1,7 @@
 # Online play — the owner's runbook
 
 What only a browser, Podman or the real server can prove. Everything else is
-in `npm run check` (see `NET_LOG.md`). Every command is one line; paste them
+in `npm test` (see `NET_LOG.md`). Every command is one line; paste them
 as they are. For the chat, match records, replays and Nakama 3.41 (added
 later), the owner's steps are in `.claude/work/nakama-mm/LOG.md`.
 
@@ -54,7 +54,7 @@ you changed `game/.env.local`.
 ## 5. Arena parity
 
 Open each map in **Practice**, press **F3**, and read the `ARENA` line. It must
-equal what the server's check prints for that map:
+equal what the server's arena test prints for that map:
 
 | Map | Digest |
 |---|---|
@@ -64,7 +64,7 @@ equal what the server's check prints for that map:
 To print them yourself:
 
 ```sh
-cd game && npm run server:check
+cd game && npx vitest run server/arenas.test.ts
 ```
 
 Chromium is already checked: `node scripts/arena-parity.mjs` builds the

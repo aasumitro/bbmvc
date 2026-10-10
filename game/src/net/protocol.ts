@@ -1,11 +1,11 @@
-import { WEAPONS, type WeaponId, type WeaponSpec } from '../game/combat.ts'
-import type { Difficulty } from '../game/ai.ts'
-import type { Loadout } from '../game/loadout.ts'
-import { checkSettings, CUSTOM, type MatchSettings } from '../game/matchSettings.ts'
-import type { Mode } from '../game/modes.ts'
-import { createStats, type Stats } from '../game/scoring.ts'
-import type { Combatant } from '../game/simulation.ts'
-import { VEHICLES, type VehicleId } from '../game/vehicle/vehicles.ts'
+import type { WeaponId, WeaponSpec } from '../content/weapons/weapons.ts'
+import { parseLoadout, type Loadout } from '../sim/loadout.ts'
+import type { MatchSettings } from '../modes/matchSettings.ts'
+import { createStats, type Stats } from '../sim/scoring.ts'
+import type { Combatant } from '../sim/simulation.ts'
+import type { VehicleId } from '../content/vehicles/vehicles.ts'
+import { LIMITS, optional, text } from './limits.ts'
+import { lobbying, type Lobbying, type LobbyMessage } from './lobbyProtocol.ts'
 
 // What the browser and the game server say to each other over the match
 // socket (server/, net/connection.ts): the messages, their numbers on the
@@ -13,22 +13,21 @@ import { VEHICLES, type VehicleId } from '../game/vehicle/vehicles.ts'
 // checks every client message passes before the server acts on it. A client
 // only ever asks — controls, where it aims, what it sees; the server decides
 // and tells. JSON, each message an object with its type in `t`. Pure: no
-// sockets here. (Imports carry .ts: protocol.check.ts runs this under node.)
+// sockets here (protocol.test.ts).
 // The snapshot alone goes as a binary frame (packSnapshot): it is most of
 // what a page is sent.
 
-export const PROTOCOL = 6 // bumped whenever a message changes shape: an old page is told to reload
+export const PROTOCOL = 7 // bumped whenever a message changes shape: an old page is told to reload
 // The build a page or a server was made from (build-id.ts, put in by Vite as
 // __BUILD__): the server lets in only pages of its own build, so a tab left
 // open across a deploy is told to reload even when no message changed shape
 // (a handling tweak, a gun's numbers) or a PROTOCOL bump was forgotten.
-// 'dev' from Vite's dev server, and under plain node.
+// 'dev' from Vite's dev server and in the unit tests.
 declare const __BUILD__: string
 export const BUILD = typeof __BUILD__ !== 'undefined' ? __BUILD__ : 'dev'
 export const RATE = { step: 60, snap: 30 } // simulation steps and snapshots per second
 export const REWIND = 12 // steps: how far back the tick a player says it sees may reach (200 ms)
 export const AIM_MARGIN = 5 // metres past the gun's range an aim point may lie
-export const LIMITS = { hello: 4096, input: 1024, token: 2048, name: 16, build: 64, lobby: 32, password: 32, code: 8, uid: 64 } // bytes, characters
 
 // --- client → server ---------------------------------------------------------------
 
@@ -38,7 +37,7 @@ export interface Hello {
   build: string // BUILD ('' when a page sent none, or nonsense: no match for any server)
   token: string // the Nakama session token (who is playing)
   guest: boolean // shown as a guest (cosmetic)
-  // A seat at once, in a room of this mode on this arena (the checks, the load
+  // A seat at once, in a room of this mode on this arena (the tests, the load
   // tool, the deploy's smoke test); the lobby checks both against the
   // registries. Neither (''): Classic's matchmaking — the seat comes later.
   mode: string
@@ -61,7 +60,7 @@ export interface Input {
 
 // Classic's matchmaking (server/matchmaker.ts): start searching in a mode on
 // an arena, stop, answer the ready check of proposal `id`, or ask where one stands.
-export const QUEUE_ACTIONS = ['search', 'cancel', 'accept', 'decline', 'state'] as const
+const QUEUE_ACTIONS = ['search', 'cancel', 'accept', 'decline', 'state'] as const
 export interface Queueing {
   t: 'mm'
   do: (typeof QUEUE_ACTIONS)[number]
@@ -70,44 +69,11 @@ export interface Queueing {
   id: string // accept, decline: the proposal ('' otherwise)
 }
 
-// Custom lobbies (server/custom.ts): watch the list, make or join a lobby,
-// and everything a member or its owner does there (.claude/work/custom/PLAN.md §8).
-export const LOBBY_ACTIONS = ['watch', 'unwatch', 'create', 'join', 'code', 'back', 'leave', 'ready', 'slot', 'start', 'edit', 'kick', 'owner', 'bot', 'unbot', 'reset', 'play', 'wait'] as const
-export const INVITE = /^[0-9A-HJKMNP-TV-Z]{8}$/ // an invite code: eight Crockford base32 characters (no I, L, O or U)
-// A code as typed, read out or put in a link: dashes and spaces dropped, the letters Crockford reads as digits turned into them.
-export const readCode = (typed: string) => typed.toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1')
-export const LOBBY_FORM = { name: [3, LIMITS.lobby], password: [4, LIMITS.password] } // lengths the form keeps to and the server holds it to (a name tidied first)
-
-// A name as shown: control characters out, inner spaces collapsed, trimmed.
-export const tidy = (text: string) => text.replace(/\p{Cc}/gu, '').replace(/\s+/g, ' ').trim()
-
-// A lobby as its owner fills in the form (create, edit).
-export interface LobbyForm {
-  name: string
-  open: boolean // listed; closed: by invite only
-  password: string | null // '' for none (public lobbies only); null: as it was (an edit: the password is never sent back)
-  mode: Mode
-  map: string
-  settings: MatchSettings
-  jip: boolean // join in progress: newcomers go straight into a running match
-}
-
-export type Lobbying =
-  | { t: 'lb'; do: 'watch' | 'unwatch' | 'leave' | 'start' | 'reset' | 'play' | 'wait' } // play / wait: into the running match / back to the waiting room
-  | { t: 'lb'; do: 'create' | 'edit'; form: LobbyForm }
-  | { t: 'lb'; do: 'join'; id: string; password: string } // from the list
-  | { t: 'lb'; do: 'code'; code: string } // an invite link or a typed code
-  | { t: 'lb'; do: 'back'; id: string } // after a drop or a reload
-  | { t: 'lb'; do: 'ready'; on: boolean }
-  | { t: 'lb'; do: 'slot' | 'unbot'; slot: number } // slot: team deathmatch, move to an open slot
-  | { t: 'lb'; do: 'bot'; slot: number; skill: Difficulty }
-  | { t: 'lb'; do: 'kick' | 'owner'; uid: string }
-
-export type ClientMessage = Hello | Input | Queueing | Lobbying | { t: 'ping'; c: number } | { t: 'bye' }
+type ClientMessage = Hello | Input | Queueing | Lobbying | { t: 'ping'; c: number } | { t: 'bye' }
 
 // --- server → client ---------------------------------------------------------------
 
-export interface Seat {
+interface SeatInfo {
   name: string
   team: number
   vehicle: VehicleId
@@ -137,8 +103,8 @@ export interface Welcome {
   settings: MatchSettings // how the room plays its matches: the line-up's size, the clock
   tick: number
   rate: typeof RATE
-  digest: string // the server's arena (arena/digest.ts): the page's must match
-  lineUp: Seat[]
+  digest: string // the server's arena (content/arenas/digest.ts): the page's must match
+  lineUp: SeatInfo[]
   chat: ChatChannels
   lobby?: string // a custom lobby's match: the lobby's id
 }
@@ -194,64 +160,25 @@ export type Queue =
       of: number // ms the ready check runs in all
     }
 
-// A lobby as the list shows it: never its code, password or anyone's user id.
-export interface LobbyRow {
-  id: string
-  name: string
-  host: string // the owner's name
-  mode: string
-  map: string
-  people: number
-  bots: number
-  size: number // the most the match takes
-  duration: number // seconds
-  locked: boolean // a password
-  phase: 'waiting' | 'playing'
-  left: number // seconds left of the match being played; 0 while waiting
-  jip: boolean
-}
-
-export type LobbySlot = { kind: 'empty' } | { kind: 'person'; uid: string; name: string; ready: boolean; away: boolean; owner: boolean } | { kind: 'bot'; skill: Difficulty }
-
-// A lobby as its members see it.
-export interface LobbyView extends LobbyRow {
-  code: string // the invite
-  open: boolean
-  settings: MatchSettings
-  slots: LobbySlot[] // the match's seats: slot i is seat i
-  chat: string // the lobby's chat channel (it carries on into the match)
-  tally: Record<string, number> // this lobby's wins: by side ('0', '1'), or by user id ('bot:' + slot for a bot)
-  you: number // your slot
-  playing: boolean // you're in the match being played
-  heir: string // who becomes the owner if the owner leaves (the longest there): their name; '' nobody (the lobby would close)
-}
-
-// Why a page is out of a lobby, or wasn't let in: the lobby is gone, full,
-// the password was wrong (too often: slow), they're banned or were kicked,
-// the owner left and nobody was left (deleted), it sat idle (closed), no room
-// was free to start (busy), too many lobbies (cap), already in one (taken).
-export type LobbyNote = 'gone' | 'full' | 'password' | 'slow' | 'banned' | 'kicked' | 'deleted' | 'closed' | 'busy' | 'cap' | 'taken'
-
 export type ServerMessage =
   | Welcome
   | Snapshot
   | State
-  | { t: 'ro'; seat: number; name: string; human: boolean; weapon: WeaponId; uid: string; present: boolean } // a seat changed hands (present false: it's empty now)
+  | { t: 'ro'; seat: number; name: string; human: boolean; weapon: WeaponId; vehicle: VehicleId; uid: string; present: boolean } // a seat changed hands, and maybe vehicle (present false: it's empty now)
   | { t: 'pong'; c: number; k: number }
   | { t: 'err'; code: ErrorCode; text: string }
   | Queue
-  | { t: 'lbs'; list: LobbyRow[] } // the list, to its watchers
-  | { t: 'lb'; lobby: LobbyView | null; note?: LobbyNote } // a member's lobby, whenever it changes; null: out of it
+  | LobbyMessage
 
 // --- numbers on the wire -------------------------------------------------------------
 
-export const cm = (metres: number) => Math.round(metres * 100)
-export const q4 = (unit: number) => Math.round(unit * 1e4) // quaternions, directions, steering
-export const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
+const cm = (metres: number) => Math.round(metres * 100)
+const q4 = (unit: number) => Math.round(unit * 1e4) // quaternions, directions, steering
+const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
 const FLAGS = { alive: 1, handbrake: 2, fire: 4, absent: 8 } // absent: an empty seat's machine, out of play
 
-// The registry id of a gun (a bot's is a scaled copy of one: ai.ts armBot).
-export const weaponId = (spec: WeaponSpec) => (Object.keys(WEAPONS) as WeaponId[]).find((id) => WEAPONS[id].model === spec.model) ?? 'minigun'
+// The registry id of a gun (a bot's is a scaled copy of one, id kept: sim/ai/brain.ts armBot).
+export const weaponId = (spec: WeaponSpec) => spec.id
 
 // A machine as everyone sees it: [id, position cm, rotation ×10⁴, velocity
 // cm/s, hull ×10, flags, aim cm, throttle and steer ×100]. Speed is left out:
@@ -259,7 +186,26 @@ export const weaponId = (spec: WeaponSpec) => (Object.keys(WEAPONS) as WeaponId[
 export function carRow(c: Combatant): number[] {
   const { position: p, rotation: q, velocity: v, control } = c
   const flags = (c.alive ? FLAGS.alive : 0) | (control.handbrake ? FLAGS.handbrake : 0) | (control.fire ? FLAGS.fire : 0) | (c.present ? 0 : FLAGS.absent)
-  return [c.id, cm(p.x), cm(p.y), cm(p.z), q4(q.x), q4(q.y), q4(q.z), q4(q.w), cm(v.x), cm(v.y), cm(v.z), Math.round(c.health * 10), flags, cm(control.aim.x), cm(control.aim.y), cm(control.aim.z), Math.round(control.throttle * 100), Math.round(c.car.steer * 100)]
+  return [
+    c.id,
+    cm(p.x),
+    cm(p.y),
+    cm(p.z),
+    q4(q.x),
+    q4(q.y),
+    q4(q.z),
+    q4(q.w),
+    cm(v.x),
+    cm(v.y),
+    cm(v.z),
+    Math.round(c.health * 10),
+    flags,
+    cm(control.aim.x),
+    cm(control.aim.y),
+    cm(control.aim.z),
+    Math.round(control.throttle * 100),
+    Math.round(c.car.steer * 100),
+  ]
 }
 
 // What a car row says, in game units.
@@ -300,7 +246,21 @@ export function readCar(row: readonly number[], out: CarState = blankCar()): Car
   return out
 }
 
-export const blankCar = (): CarState => ({ id: 0, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, velocity: { x: 0, y: 0, z: 0 }, speed: 0, health: 0, alive: true, present: true, handbrake: false, fire: false, aim: { x: 0, y: 0, z: 0 }, throttle: 0, steer: 0 })
+export const blankCar = (): CarState => ({
+  id: 0,
+  position: { x: 0, y: 0, z: 0 },
+  rotation: { x: 0, y: 0, z: 0, w: 1 },
+  velocity: { x: 0, y: 0, z: 0 },
+  speed: 0,
+  health: 0,
+  alive: true,
+  present: true,
+  handbrake: false,
+  fire: false,
+  aim: { x: 0, y: 0, z: 0 },
+  throttle: 0,
+  steer: 0,
+})
 
 // What only the player's own client gets of its machine, for its HUD and
 // its prediction: [spin mrad/s ×3, steer ×10⁴, upended ms, ammo, reload ms,
@@ -308,7 +268,18 @@ export const blankCar = (): CarState => ({ id: 0, position: { x: 0, y: 0, z: 0 }
 export function meRow(c: Combatant): number[] {
   const w = c.car.body.angvel()
   const ms = (seconds: number) => Math.round(seconds * 1000)
-  return [Math.round(w.x * 1000), Math.round(w.y * 1000), Math.round(w.z * 1000), q4(c.car.steer), ms(c.car.upended), c.weapon.ammo, ms(c.weapon.reload), ms(c.weapon.cooldown), ms(c.stuck), ms(c.recovery)]
+  return [
+    Math.round(w.x * 1000),
+    Math.round(w.y * 1000),
+    Math.round(w.z * 1000),
+    q4(c.car.steer),
+    ms(c.car.upended),
+    c.weapon.ammo,
+    ms(c.weapon.reload),
+    ms(c.weapon.cooldown),
+    ms(c.stuck),
+    ms(c.recovery),
+  ]
 }
 
 export interface MeState {
@@ -323,7 +294,16 @@ export interface MeState {
 }
 
 export function readMe([wx, wy, wz, steer, upended, ammo, reload, cooldown, stuck, recovery]: readonly number[]): MeState {
-  return { spin: { x: wx / 1000, y: wy / 1000, z: wz / 1000 }, steer: steer / 1e4, upended: upended / 1000, ammo, reload: reload / 1000, cooldown: cooldown / 1000, stuck: stuck / 1000, recovery: recovery / 1000 }
+  return {
+    spin: { x: wx / 1000, y: wy / 1000, z: wz / 1000 },
+    steer: steer / 1e4,
+    upended: upended / 1000,
+    ammo,
+    reload: reload / 1000,
+    cooldown: cooldown / 1000,
+    stuck: stuck / 1000,
+    recovery: recovery / 1000,
+  }
 }
 
 // Every statistic, in one order both sides agree on.
@@ -439,25 +419,38 @@ export function unpackSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
 }
 
 // What the server sent, as a message: a binary frame is a snapshot, text is JSON.
-export const readServer = (data: string | ArrayBuffer | Uint8Array): ServerMessage => (typeof data === 'string' ? (JSON.parse(data) as ServerMessage) : unpackSnapshot(data))
+export const readServer = (data: string | ArrayBuffer | Uint8Array): ServerMessage =>
+  typeof data === 'string' ? (JSON.parse(data) as ServerMessage) : unpackSnapshot(data)
 
-// Bytes a message takes on the wire (text: its length, as the checks have always counted it).
+// Bytes a message takes on the wire (text: its length, as the tests have always counted it).
 export const wireSize = (data: string | Uint8Array) => (typeof data === 'string' ? data.length : data.byteLength)
 
 // One step's controls as the client sends them.
-export function inputMessage(seq: number, control: { throttle: number; steer: number; handbrake: boolean; fire: boolean; recover: boolean; aim: { x: number; y: number; z: number } }, view: number) {
+export function inputMessage(
+  seq: number,
+  control: { throttle: number; steer: number; handbrake: boolean; fire: boolean; recover: boolean; aim: { x: number; y: number; z: number } },
+  view: number,
+) {
   const { throttle, steer, handbrake, fire, recover, aim } = control
-  return JSON.stringify({ t: 'in', s: seq, th: Math.round(throttle * 100), st: Math.round(steer * 100), hb: +handbrake, f: +fire, r: +recover, a: [cm(aim.x), cm(aim.y), cm(aim.z)], w: view })
+  return JSON.stringify({
+    t: 'in',
+    s: seq,
+    th: Math.round(throttle * 100),
+    st: Math.round(steer * 100),
+    hb: +handbrake,
+    f: +fire,
+    r: +recover,
+    a: [cm(aim.x), cm(aim.y), cm(aim.z)],
+    w: view,
+  })
 }
 
 // --- the server's checks -----------------------------------------------------------------
 
-export type Parsed = { ok: true; message: ClientMessage } | { ok: false; error: string }
+type Parsed = { ok: true; message: ClientMessage } | { ok: false; error: string }
 
 const refuse = (error: string): Parsed => ({ ok: false, error })
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
-const text = (value: unknown, max: number): value is string => typeof value === 'string' && value.length > 0 && value.length <= max
-const optional = (value: unknown, max: number): value is string => value === '' || text(value, max)
 
 // A client message, checked: size, JSON, shape, finite numbers, ranges.
 // Out-of-range numbers are clamped, flags coerced to booleans, unknown
@@ -504,10 +497,21 @@ export function parseClient(raw: string, bytes = raw.length): Parsed {
       if (!finite(v)) return refuse('bad version')
       if (!text(token, LIMITS.token)) return refuse('bad token')
       if (!optional(mode, LIMITS.name) || !optional(map, LIMITS.name)) return refuse('bad mode or map')
-      const asked = typeof loadout === 'object' && loadout !== null ? (loadout as Record<string, unknown>) : {}
       // a missing or odd build is kept as '' rather than refused: the page is told to reload, not struck
       const build = text(m.build, LIMITS.build) ? m.build : ''
-      return { ok: true, message: { t: 'hello', v, build, token, guest: !!m.guest, mode, map, loadout: { vehicle: pick(VEHICLES, asked.vehicle, 'razor'), weapon: pick(WEAPONS, asked.weapon, 'minigun') } } }
+      return {
+        ok: true,
+        message: {
+          t: 'hello',
+          v,
+          build,
+          token,
+          guest: !!m.guest,
+          mode,
+          map,
+          loadout: parseLoadout(loadout),
+        },
+      }
     }
     case 'mm': {
       if (bytes > LIMITS.input) return refuse('queue message too large')
@@ -528,55 +532,6 @@ export function parseClient(raw: string, bytes = raw.length): Parsed {
     default:
       return refuse('unknown type')
   }
-}
-
-// A lobby message, checked: its size, the action, and each field it names —
-// strings within their limits, whole numbers in range, the form's settings by
-// checkSettings. The map is the server's to check against the registry.
-const SLOTS = 12 // the biggest match's
-function lobbying(m: Record<string, unknown>, bytes: number): Parsed {
-  if (bytes > LIMITS.input) return refuse('lobby message too large')
-  const act = LOBBY_ACTIONS.find((a) => a === m.do)
-  if (!act) return refuse('bad lobby action')
-  const slot = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0 && (value as number) < SLOTS
-  switch (act) {
-    case 'create':
-    case 'edit': {
-      const { name, open, password, mode, map, jip } = m
-      if (!text(name, LIMITS.lobby) || typeof open !== 'boolean' || typeof jip !== 'boolean') return refuse('bad lobby form')
-      if (!(password === null || optional(password, LIMITS.password))) return refuse('bad password')
-      const kind = CUSTOM.modes.find((each) => each === mode)
-      if (!kind || !text(map, LIMITS.name)) return refuse('bad mode or map')
-      const checked = checkSettings(kind, m.settings)
-      if (!checked.ok) return refuse('bad settings')
-      return { ok: true, message: { t: 'lb', do: act, form: { name, open, password, mode: kind, map, settings: checked.settings, jip } } }
-    }
-    case 'join':
-      return text(m.id, LIMITS.code) && optional(m.password ?? '', LIMITS.password) ? { ok: true, message: { t: 'lb', do: act, id: m.id, password: (m.password as string | undefined) ?? '' } } : refuse('bad join')
-    case 'code':
-      return typeof m.code === 'string' && INVITE.test(m.code) ? { ok: true, message: { t: 'lb', do: act, code: m.code } } : refuse('bad code')
-    case 'back':
-      return text(m.id, LIMITS.code) ? { ok: true, message: { t: 'lb', do: act, id: m.id } } : refuse('bad lobby id')
-    case 'ready':
-      return typeof m.on === 'boolean' ? { ok: true, message: { t: 'lb', do: act, on: m.on } } : refuse('bad ready')
-    case 'slot':
-    case 'unbot':
-      return slot(m.slot) ? { ok: true, message: { t: 'lb', do: act, slot: m.slot } } : refuse('bad slot')
-    case 'bot': {
-      const skill = CUSTOM.skills.find((each) => each === m.skill)
-      return slot(m.slot) && skill ? { ok: true, message: { t: 'lb', do: act, slot: m.slot, skill } } : refuse('bad bot')
-    }
-    case 'kick':
-    case 'owner':
-      return text(m.uid, LIMITS.uid) ? { ok: true, message: { t: 'lb', do: act, uid: m.uid } } : refuse('bad member')
-    default:
-      return { ok: true, message: { t: 'lb', do: act } }
-  }
-}
-
-// `id` if the registry has it, else the default.
-function pick<K extends string>(registry: Record<K, unknown>, id: unknown, fallback: K): K {
-  return typeof id === 'string' && Object.hasOwn(registry, id) ? (id as K) : fallback
 }
 
 // The aim point pulled in to the gun's range (plus a margin) from `from`,

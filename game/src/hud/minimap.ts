@@ -1,6 +1,5 @@
-import type { Arena } from '../game/arena/arena'
-import type { Zone } from '../game/ffa/rules'
-import { ITEMS, type Item } from '../game/items/items'
+import type { Arena } from '../content/arenas/arena.ts'
+import { ITEMS, type Item } from '../modes/items/items.ts'
 
 // Tactical minimap drawn from the arena's own floor plan (Arena.paintMap) and
 // collider footprints — no image. The layout is painted once; each frame the
@@ -17,10 +16,10 @@ interface Blip {
 }
 
 // The mode's extras: items within `range` of the player — what a bot knows
-// too — and, in free for all, the hot zone (always, with a rim arrow when
-// it's off the map) and a ring round the sole leader.
+// too — and, from the mode's panel, a zone (free for all's hot zone: always,
+// with a rim arrow when it's off the map) and a ring round the sole leader.
 export interface MapMarks {
-  zone: Zone | null
+  zone: { x: number; z: number; radius: number } | null
   items: readonly Item[]
   range: number
   leader: { x: number; z: number } | null
@@ -73,7 +72,15 @@ export function createMinimap(canvas: HTMLCanvasElement, arena: Arena) {
 
   // `viewYaw` / `heading` are rotation.y angles (0 faces +Z, south). Blips on
   // `team` are friendly; `people` (by id, online) are ringed.
-  return function draw(centre: { x: number; z: number }, viewYaw: number, heading: number, blips: Blip[], team: number, marks?: MapMarks, people?: readonly boolean[]) {
+  return function draw(
+    centre: { x: number; z: number },
+    viewYaw: number,
+    heading: number,
+    blips: Blip[],
+    team: number,
+    marks?: MapMarks,
+    people?: readonly boolean[],
+  ) {
     const size = Math.round(canvas.clientWidth * window.devicePixelRatio)
     if (canvas.width !== size) canvas.width = canvas.height = size
     const r = size / 2

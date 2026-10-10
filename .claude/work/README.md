@@ -10,6 +10,8 @@ Design notes and implementation logs, kept next to the code they describe. The r
 | `net/` | Online play: architecture, plan, log and runbook (prediction, interpolation, lag compensation) |
 | `mm/` | Classic matchmaking: plan and log |
 | `custom/` | Custom lobbies: plan and log (lobby list, invites, waiting room, match settings) |
+| `refactor/` | The game's code reorganised into layers, stage by stage, without the game changing: plan, stages, log |
+| `content/` | The content phase: vehicles, weapons and a map added one at a time (plan) |
 | `nakama-mm/` | Online play with Nakama: what Nakama does, what the game server keeps; binary snapshots, match records, fair play, replays, in-match chat |
 | `www/` | The site: plan and log |
 | `active/` | Work in progress |

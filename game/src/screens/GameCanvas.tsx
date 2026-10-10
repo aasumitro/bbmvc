@@ -1,24 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Difficulty } from '../game/ai'
+import type { Difficulty } from '../sim/difficulty.ts'
 import { flushSync } from 'react-dom'
-import { playSound } from '../game/audio'
-import type { Progress } from '../game/loading'
-import type { Loadout } from '../game/loadout'
-import { MAPS, type MapId } from '../game/maps'
-import type { Match, MatchPhase } from '../game/match'
-import type { Mode } from '../game/modes'
-import { startGame } from '../game/runtime'
-import { createChat, type Chat } from '../net/chat'
-import { NetError, type Link } from '../net/connection'
-import { settings, updateSettings } from '../game/settings'
-import { ChatBox } from '../hud/Chat'
-import { Hud, type HudHandle } from '../hud/Hud'
-import { Confirm } from './Confirm'
-import { Drawer } from './Drawer'
-import { ActionButton, Menu } from './Menu'
-import { Results } from './Results'
-import { useCustom } from './search'
-import { RestoreDefaults, SettingsPanel } from './SettingsPanel'
+import type { Progress } from '../runtime/loading.ts'
+import type { Loadout } from '../sim/loadout.ts'
+import { MAPS, type MapId } from '../content/arenas/maps.ts'
+import type { Match, MatchPhase } from '../runtime/match.ts'
+import type { Mode } from '../modes/ids.ts'
+import { startGame } from '../runtime/runtime.ts'
+import { createChat, type Chat } from '../net/chat.ts'
+import { NetError, type Link } from '../net/connection.ts'
+import { settings, updateSettings } from '../view/settings.ts'
+import { ChatBox } from '../hud/Chat.tsx'
+import { Hud, type HudHandle } from '../hud/Hud.tsx'
+import { Drawer } from './Drawer.tsx'
+import { ExitConfirm } from './ExitConfirm.tsx'
+import { LoadingOverlay } from './LoadingOverlay.tsx'
+import { ActionButton } from './Menu.tsx'
+import { PauseMenu } from './PauseMenu.tsx'
+import { Results } from './Results.tsx'
+import { useCustom } from './hooks.ts'
+import { RestoreDefaults, SettingsPanel } from './SettingsPanel.tsx'
 
 interface GameCanvasProps {
   loadout: Loadout // from the garage
@@ -29,7 +30,7 @@ interface GameCanvasProps {
   onExit: () => void
 }
 
-// The gameplay screen. It starts the game runtime (game/runtime.ts) in its
+// The gameplay screen. It starts the game runtime (runtime/runtime.ts) in its
 // container and disposes it on the way out; React only re-renders here on
 // the loading steps and on match phase changes (pause, destroyed, victory).
 // The runtime's loop drives the simulation, camera, HUD and rendering every
@@ -88,7 +89,13 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
   }, [loadout, mode, map, difficulty, link, attempt])
 
   // Online: the match's chat (net/chat.ts), joined for as long as the match runs.
-  const chat: Chat | null = useMemo(() => (link && match ? createChat(link.welcome.chat, { names: () => match.combatants.map((c) => c.name), uids: () => match.uids, me: () => match.player.id }) : null), [link, match])
+  const chat: Chat | null = useMemo(
+    () =>
+      link && match
+        ? createChat(link.welcome.chat, { names: () => match.combatants.map((c) => c.name), uids: () => match.uids, me: () => match.player.id })
+        : null,
+    [link, match],
+  )
   useEffect(() => {
     if (!chat) return
     chat.start()
@@ -184,63 +191,32 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
   return (
     <>
       <div ref={containerRef} className="fixed inset-0 cursor-none bg-[#0b0908]" /> {/* the crosshair is the pointer */}
-      <Hud ref={hudRef} />
+      <Hud ref={hudRef} mode={link ? (link.welcome.mode as Mode) : mode} /> {/* online: the room's mode */}
       {chat && chatActive && <ChatBox chat={chat} onTyping={typing} />}
       {/* the match's loading: the bar is the share of steps finished, the line under it the one running */}
       {phase === 'loading' && (
-        <div className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-[#0b0908] text-[#f2ece0]">
-          <p className="font-display text-3xl italic">{online ? 'Joining the match' : MAPS[map].arrival}</p>
-          {online && <p className="-mt-3 text-xs font-bold tracking-[0.3em] text-neutral-400 uppercase">{`${MAPS[map].name} · ${people} ${people === 1 ? 'player' : 'players'}`}</p>}
-          <div
-            role="progressbar"
-            aria-label="Loading the match"
-            aria-valuemin={0}
-            aria-valuemax={progress.total}
-            aria-valuenow={progress.done}
-            aria-valuetext={progress.label}
-            className="h-px w-56 overflow-hidden bg-white/15"
-          >
-            <div className="h-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)] transition-[width] duration-150 ease-linear" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
-          </div>
-          {failed !== null ? (
-            <div role="alert" className="flex w-[min(90vw,420px)] flex-col items-center text-center">
-              <p className="text-xs tracking-[0.3em] text-red-400 uppercase">{progress.label} failed</p>
-              <p className="mt-2 font-display text-sm text-neutral-300 italic">{failed || "The match couldn't start. The details are in the browser console."}</p>
-              {!online && <ActionButton primary title="Retry" line="Try starting again" onClick={retry} className="mt-6 w-full" />}
-              <ActionButton primary={online} title={link?.welcome.lobby ? 'Back to lobby' : 'Back to garage'} line="Leave this match" onClick={onExit} className={online ? 'mt-6 w-full' : 'mt-3 w-full'} />
-            </div>
-          ) : (
-            <p className="text-xs tracking-[0.3em] text-neutral-400 uppercase">{progress.label}</p>
-          )}
-        </div>
+        <LoadingOverlay
+          online={online}
+          map={map}
+          people={people}
+          progress={progress}
+          failed={failed}
+          back={link?.welcome.lobby ? 'Back to lobby' : 'Back to garage'}
+          onRetry={retry}
+          onExit={onExit}
+        />
       )}
-      {phase === 'paused' &&
-        (online ? (
-          <MatchMenu
-            kicker={`${MAPS[match?.map ?? map].name} · Online`}
-            title="Match menu"
-            line="The match goes on without a pause"
-            escape="Back"
-            inactive={drawer !== null || leaving}
-            options={[
-              { label: 'Back to the match', action: resume },
-              { label: 'Settings', action: () => setDrawer('settings') },
-              { label: link?.welcome.lobby ? 'Back to lobby' : 'Leave match', action: () => setLeaving(true) },
-            ]}
-          />
-        ) : (
-          <MatchMenu
-            kicker={MAPS[map].name}
-            title="Paused"
-            escape="Resume"
-            inactive={drawer !== null || leaving}
-            options={[
-              { label: 'Resume', action: resume }, // no restart: a match runs to the end
-              { label: 'Settings', action: () => setDrawer('settings') },
-              { label: 'Exit to garage', action: () => setLeaving(true) },
-            ]}
-          />
-        ))}
+      {phase === 'paused' && (
+        <PauseMenu
+          online={online}
+          arena={MAPS[online ? (match?.map ?? map) : map].name}
+          lobby={!!link?.welcome.lobby}
+          inactive={drawer !== null || leaving}
+          onResume={resume}
+          onSettings={() => setDrawer('settings')}
+          onLeave={() => setLeaving(true)}
+        />
+      )}
       {phase === 'paused' && drawer === 'settings' && (
         <Drawer kicker={online ? 'Match menu' : 'Paused'} title="Settings" onClose={() => setDrawer(null)} footer={<RestoreDefaults />}>
           <SettingsPanel />
@@ -249,14 +225,7 @@ export function GameCanvas({ loadout, mode, map, difficulty, link, onExit }: Gam
       {(phase === 'victory' || phase === 'defeat') && match && <Results match={match} lobby={lobby} onPlayAgain={restart} onExit={onExit} />}
       {phase === 'lost' && match && <Lost reason={match.lost} onExit={onExit} />}
       {/* leaving a match still in progress asks first; after the result it's a plain exit */}
-      {leaving &&
-        (link?.welcome.lobby ? (
-          <Confirm title="Back to the lobby?" body="Your machine leaves the match; you stay in the lobby." confirm="Back to lobby" onConfirm={onExit} onCancel={() => setLeaving(false)} />
-        ) : online ? (
-          <Confirm title="Leave the match?" body="A bot takes your machine over." confirm="Leave match" onConfirm={onExit} onCancel={() => setLeaving(false)} />
-        ) : (
-          <Confirm title="Leave the match?" body="Your progress in this match will be lost." confirm="Exit to garage" onConfirm={onExit} onCancel={() => setLeaving(false)} />
-        ))}
+      {leaving && <ExitConfirm lobby={!!link?.welcome.lobby} online={online} onConfirm={onExit} onCancel={() => setLeaving(false)} />}
     </>
   )
 }
@@ -281,64 +250,6 @@ function Lost({ reason, onExit }: { reason: string; onExit: () => void }) {
         </h2>
         <p className="mt-3 font-display text-base text-neutral-300 italic">{reason}</p>
         <ActionButton primary title="Back to garage" line="Leave this match" onClick={onExit} className="mt-7 w-full" />
-      </div>
-    </div>
-  )
-}
-
-interface MatchMenuProps {
-  kicker: string
-  title: string
-  line?: string // italic, under the title
-  escape?: string // what Esc does here, for the key hints
-  inactive?: boolean // a drawer is open over it and takes the keys
-  options: Array<{ label: string; action: () => void }>
-}
-
-const keycap = 'rounded border border-neutral-500/50 px-1.5 py-0.5'
-
-// In-match menu over the dimmed arena, in the main menu's style: arrows or
-// W/S choose, Enter or Space selects, the mouse works too.
-function MatchMenu({ kicker, title, line, escape, inactive, options }: MatchMenuProps) {
-  const [selected, setSelected] = useState(0)
-  const choose = (i: number) => {
-    playSound('ui')
-    options[i].action()
-  }
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.repeat || inactive) return // a key still held from driving must not run through the menu
-      if (e.code === 'ArrowDown' || e.code === 'KeyS') setSelected((i) => (i + 1) % options.length)
-      if (e.code === 'ArrowUp' || e.code === 'KeyW') setSelected((i) => (i - 1 + options.length) % options.length)
-      if (e.key === 'Enter' || e.code === 'Space') {
-        e.preventDefault() // no second press through a focused button
-        choose(selected)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  })
-
-  return (
-    <div className="fixed inset-0 z-10 flex items-center bg-gradient-to-r from-black/80 via-black/50 to-black/10 pl-[8vw] text-[#f2ece0]">
-      <div>
-        <p className="text-xs font-bold tracking-[0.3em] text-red-400/90 uppercase">{kicker}</p>
-        <h2 className="m-0 mt-2 font-display text-6xl font-semibold tracking-[0.03em]">{title}</h2>
-        {line && <p className="mt-2 font-display text-lg text-neutral-300 italic">{line}</p>}
-        <Menu items={options} selected={selected} onSelect={setSelected} onActivate={choose} className="mt-9" />
-        <div className="mt-10 flex items-center gap-4 text-xs tracking-[0.1em] text-neutral-400 uppercase">
-          <span className={keycap}>&uarr;&darr;</span>
-          <span>Choose</span>
-          <span className={keycap}>Enter</span>
-          <span>Select</span>
-          {escape && (
-            <>
-              <span className={keycap}>Esc</span>
-              <span>{escape}</span>
-            </>
-          )}
-        </div>
       </div>
     </div>
   )

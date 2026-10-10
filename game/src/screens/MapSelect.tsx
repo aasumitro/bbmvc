@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
-import { DIFFICULTIES, type Difficulty } from '../game/ai'
-import { MENU_BACKDROP } from '../game/loading'
-import type { Loadout } from '../game/loadout'
-import { MAPS, mapsFor, type MapId } from '../game/maps'
-import { MODES, type Mode } from '../game/modes'
-import { cancelSearch } from '../net/matchmaking'
-import { Robot } from './Avatar'
-import { Custom } from './Custom'
-import { ActionButton, Menu, Pager, Segmented, type MenuItem } from './Menu'
-import { useClock, useCustom, useSearch, waited } from './search'
+import { DIFFICULTIES, type Difficulty } from '../sim/difficulty.ts'
+import { MENU_BACKDROP } from '../runtime/loading.ts'
+import type { Loadout } from '../sim/loadout.ts'
+import { MAPS, mapsFor, type MapId } from '../content/arenas/maps.ts'
+import { MODES } from '../modes/modes.ts'
+import { MODE_IDS, type Mode } from '../modes/ids.ts'
+import { cancelSearch } from '../net/matchmaking.ts'
+import { Robot } from './Avatar.tsx'
+import { Custom } from './lobbies/Custom.tsx'
+import { ActionButton, Menu, Pager, Segmented, type MenuItem } from './Menu.tsx'
+import { useClock, useCustom, useSearch, waited } from './hooks.ts'
 
 export interface Pick {
   mode: Mode
@@ -24,7 +25,6 @@ interface MapSelectProps {
   onBack: () => void
 }
 
-const MODE_IDS = Object.keys(MODES) as Mode[]
 const DIFFICULTY_IDS = Object.keys(DIFFICULTIES) as Difficulty[]
 const NAV_ITEMS: MenuItem[] = [...MODE_IDS.map((mode) => ({ label: MODES[mode].label })), { label: 'Custom' }, { label: 'Back' }]
 const CUSTOM = MODE_IDS.length
@@ -72,7 +72,9 @@ export function MapSelect({ pick, loadout, onStart, onBack }: MapSelectProps) {
   const [difficulty, setDifficulty] = useState(pick.difficulty)
   const [online, setOnline] = useState(pick.online) // what Enter starts: Classic, or Practice
   const [row, setRow] = useState(lobby ? 0 : -1) // the choice the keys change: -1 the mode list, else a ROWS index (Custom: its own)
-  const [maps, setMaps] = useState(() => Object.fromEntries(MODE_IDS.map((mode) => [mode, mapsFor(mode).includes(pick.map) ? pick.map : mapsFor(mode)[0]])) as Record<Mode, MapId>)
+  const [maps, setMaps] = useState(
+    () => Object.fromEntries(MODE_IDS.map((mode) => [mode, mapsFor(mode).includes(pick.map) ? pick.map : mapsFor(mode)[0]])) as Record<Mode, MapId>,
+  )
   const mode = MODE_IDS[selected] ?? MODE_IDS[0] // on Custom and Back the mode's side isn't shown: any mode will do
   const { label, tags, blurb } = MODES[mode]
   const map = maps[mode]
@@ -136,11 +138,17 @@ export function MapSelect({ pick, loadout, onStart, onBack }: MapSelectProps) {
       style={{ backgroundImage: `url('${MENU_BACKDROP}')` }}
     >
       <div className="absolute top-8 left-[6vw]">
-        <h1 className="m-0 font-display text-6xl font-semibold tracking-[0.05em]">Arena</h1>
+        <h1 className="m-0 font-display text-6xl font-semibold tracking-wider">Arena</h1>
         <p className="mt-1 font-display text-lg text-red-400/90 italic">Choose your fight</p>
       </div>
 
-      <Menu items={NAV_ITEMS} selected={selected} onSelect={setSelected} onActivate={(i) => (i === BACK ? onBack() : (setSelected(i), setRow(0)))} className="absolute top-44 left-[6vw]" />
+      <Menu
+        items={NAV_ITEMS}
+        selected={selected}
+        onSelect={setSelected}
+        onActivate={(i) => (i === BACK ? onBack() : (setSelected(i), setRow(0)))}
+        className="absolute top-44 left-[6vw]"
+      />
 
       {selected === CUSTOM && (
         // no fade in: its transform would hold Custom's drawer and dialogs inside the panel
@@ -153,9 +161,11 @@ export function MapSelect({ pick, loadout, onStart, onBack }: MapSelectProps) {
           {/* the arena: its preview fades in on a change; which one of how many above its name, one pager for both ways */}
           <div className="relative">
             {focus === 'arena' && mark}
-            <div className={`relative aspect-[1010/470] overflow-hidden rounded-sm border bg-black shadow-[0_20px_60px_rgba(0,0,0,0.6)] ${focus === 'arena' ? 'border-red-500' : 'border-white/20'}`}>
+            <div
+              className={`relative aspect-1010/470 overflow-hidden rounded-sm border bg-black shadow-[0_20px_60px_rgba(0,0,0,0.6)] ${focus === 'arena' ? 'border-red-500' : 'border-white/20'}`}
+            >
               <img key={map} src={MAPS[map].image} alt={MAPS[map].name} className="h-full w-full animate-fade object-cover motion-reduce:animate-none" />
-              <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/90 via-black/45 to-transparent px-6 pt-20 pb-5">
+              <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-linear-to-t from-black/90 via-black/45 to-transparent px-6 pt-20 pb-5">
                 <div key={map} className="animate-rise motion-reduce:animate-none">
                   <p className="text-[0.65rem] font-bold tracking-[0.3em] text-neutral-300 uppercase tabular-nums">
                     Arena <span className="text-red-400">{two(place + 1)}</span> / {two(choices.length)}
@@ -170,12 +180,24 @@ export function MapSelect({ pick, loadout, onStart, onBack }: MapSelectProps) {
           <div className={`relative mt-4 flex items-center gap-4 transition-opacity ${online && focus !== 'bots' ? 'opacity-50' : ''}`}>
             {focus === 'bots' && mark}
             <span className="text-[0.65rem] font-bold tracking-[0.3em] text-neutral-300 uppercase">Practice bots</span>
-            <Segmented label="Practice bot difficulty" options={DIFFICULTY_IDS.map((id) => ({ id, label: DIFFICULTIES[id].label }))} value={difficulty} onChange={setDifficulty} focused={focus === 'bots'} />
+            <Segmented
+              label="Practice bot difficulty"
+              options={DIFFICULTY_IDS.map((id) => ({ id, label: DIFFICULTIES[id].label }))}
+              value={difficulty}
+              onChange={setDifficulty}
+              focused={focus === 'bots'}
+            />
           </div>
 
           <div className="relative mt-4 grid grid-cols-2 gap-4">
             {focus === 'play' && mark}
-            <ActionButton primary={!online} icon={<Robot />} title="Practice" line={`Play with ${DIFFICULTIES[difficulty].label} Bots${searching ? ' while you wait' : ''}`} onClick={practice} />
+            <ActionButton
+              primary={!online}
+              icon={<Robot />}
+              title="Practice"
+              line={`Play with ${DIFFICULTIES[difficulty].label} Bots${searching ? ' while you wait' : ''}`}
+              onClick={practice}
+            />
             <ActionButton
               primary={online}
               icon={globe}
@@ -209,7 +231,9 @@ export function MapSelect({ pick, loadout, onStart, onBack }: MapSelectProps) {
         </div>
       )}
 
-      <div className={`absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-[0.1em] text-neutral-400 uppercase ${selected === CUSTOM && row >= 0 ? 'hidden' : ''}`}>
+      <div
+        className={`absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-widest text-neutral-400 uppercase ${selected === CUSTOM && row >= 0 ? 'hidden' : ''}`}
+      >
         {row < 0 ? (
           <>
             <span className={keycap}>&uarr;&darr;</span>

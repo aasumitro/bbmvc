@@ -100,7 +100,7 @@ locally and refused by the deploy.
 ## Checks
 
 ```sh
-cd game && npm run lint && npm run build && npm run check   # check: simulation, rules, bots, protocol, lobbies, a real server over sockets
+cd game && npm run lint && npm run format:check && npm run build && npm test   # Vitest: simulation, rules, bots, protocol, lobbies, then a real server over sockets
 cd www && npm run lint && npm run check && npm run build
 node scripts/nakama-smoke.mjs                              # against the running Nakama
 ```

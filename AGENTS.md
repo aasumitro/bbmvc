@@ -14,11 +14,12 @@ Do NOT build payments, stores, inventory, progression, subscriptions, admin syst
 
 ```
 game/     React + Vite + TypeScript client (menus, garage + loadout, mode + arena select, matches — team deathmatch, free for all — on Rapier physics: practice vs bots, Classic online (matchmaking), or Custom lobbies)
+          game/src: layer folders, lowest first — shared, render, content (vehicles, arenas), sim, modes, view, runtime, net, screens, hud (code map: game/AGENTS.md)
           game/server: the authoritative game server (Node, the client's own simulation and modes; match records, fair-play signals and replays; bundled by vite.server.config.ts into game/dist-server/, gitignored)
 nakama/   Nakama 3.41 compose setup (postgres + heroiclabs/nakama image), run with Podman; Lua modules: stats.lua (online count, site stats), guests.lua (guests deleted 3 days after they're made, nightly from scripts/backup.sh), chat.lua (the match chat's rules)
 www/      Astro 7 static site (dev on :8000): landing, the guide (MDX), log in / register / account on Nakama (React islands); serves the game build at /play. Plan and log: .claude/work/www/
 deploy/   the server: compose.yml (Caddy + game server + Nakama + Postgres; the game server's match records and replays on a named volume), Caddyfile (the static site from site/current, /match -> the game server, /api/stats -> Nakama), .env.example
-scripts/  build.sh (game for /play -> www/public/play -> www/dist, precompressed by precompress.mjs; the game server -> game/dist-server), run.sh (local), deploy.sh (server: switch the site's release, and the game server's when its bundle isn't the one running or with --server — rollbacks too; refuses Nakama's default session key, or a refresh key equal to it) + backup.sh (nightly on the server: Nakama's database and the match records into backups/, then the guests older than 3 days deleted), nakama-smoke.mjs, match-smoke.mjs, chat-smoke.mjs (the match chat's rules on a running Nakama), guests-smoke.mjs (the guest cleanup; local only: it backdates its accounts with psql); arena-parity.mjs + browser-match.mjs (headless Chromium through the globally installed Playwright — not a dependency, not in CI: the arenas' digests in a browser; two pages in one online match)
+scripts/  build.sh (game for /play -> www/public/play -> www/dist, precompressed by precompress.mjs; the game server -> game/dist-server), run.sh (local), deploy.sh (server: switch the site's release, and the game server's when its bundle isn't the one running or with --server — rollbacks too; refuses Nakama's default session key, or a refresh key equal to it) + backup.sh (nightly on the server: Nakama's database and the match records into backups/, then the guests older than 3 days deleted), nakama-smoke.mjs, match-smoke.mjs, chat-smoke.mjs (the match chat's rules on a running Nakama), guests-smoke.mjs (the guest cleanup; local only: it backdates its accounts with psql); arena-parity.mjs + browser-match.mjs (headless Chromium through the globally installed Playwright — not a dependency, not in CI: the arenas' digests in a browser; two pages in one online match); tailwind-classes.mjs (every Tailwind class in game/ and www/ as Tailwind writes it)
 ```
 
 No monorepo tooling, no root package.json. `game/`, `www/` and `nakama/` are independent.
@@ -59,6 +60,17 @@ The site's dev server on `:8000` is usually up too (`/api/stats` proxied to Naka
 2. Small cohesive modules, strict TypeScript.
 
 The game's own principles: `game/AGENTS.md`.
+
+## Tailwind (game and www)
+
+Both use Tailwind v4 (4.3), configured in CSS. Read `.claude/codes/tw/` before writing classes, `pitfalls.md` first.
+
+- Write every class the way Tailwind itself prints it (its canonical form). Any other form is a warning in the editor's Tailwind language server (`suggestCanonicalClasses`). `node scripts/tailwind-classes.mjs` lists such classes in both projects, with the form to use; it must list none before a commit. For example:
+  - v4 names: `bg-linear-to-r`, `shrink-0`, `wrap-break-word`, `text-shadow-none`; not `bg-gradient-to-r`, `flex-shrink-0`, `break-words`, `[text-shadow:none]`.
+  - A theme or spacing step where one equals the value: `tracking-widest` (0.1em), `max-w-135` (540px), `h-0.75` (3px), `z-5`; not `tracking-[0.1em]`, `max-w-[540px]`, `h-[3px]`, `z-[5]`.
+  - Opacity as a percent: `bg-white/3`, not `bg-white/[0.03]`.
+  - A utility, not an arbitrary property: `mask-[…]`, not `[mask-image:…]`.
+- Some names mean something else in v4 than in v3: `shadow-sm`, `rounded`, `blur-sm`, `backdrop-blur-sm`, bare `ring`, `outline-none`. Pick them by their v4 value (`pitfalls.md`), never from v3 memory.
 
 ## Development order (do not implement all at once)
 

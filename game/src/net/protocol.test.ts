@@ -1,0 +1,451 @@
+// Tests for the match protocol (protocol.ts): what the wire carries
+// comes back within its rounding, and every rule a client message must pass
+// holds — clamped, coerced, or refused.
+import { describe, expect, it } from 'vitest'
+import * as THREE from 'three'
+import { WEAPONS } from '../content/weapons/weapons.ts'
+import { checkSettings, classic } from '../modes/matchSettings.ts'
+import { createWorld, initPhysics, PHYSICS_STEP } from '../sim/physics.ts'
+import { createStats } from '../sim/scoring.ts'
+import { enlist } from '../sim/simulation.ts'
+import { forwardSpeed } from '../sim/drive.ts'
+import {
+  acceptSeq,
+  AIM_MARGIN,
+  BUILD,
+  carRow,
+  clampAim,
+  clampView,
+  inputMessage,
+  meRow,
+  packCars,
+  packEvents,
+  packSnapshot,
+  parseClient,
+  PROTOCOL,
+  RATE,
+  readCar,
+  readMe,
+  readServer,
+  readStats,
+  REWIND,
+  SNAPSHOT,
+  statsRow,
+  unpackSnapshot,
+  weaponId,
+  wireSize,
+  type Input,
+  type ServerMessage,
+  type Welcome,
+  type WireEvent,
+} from './protocol.ts'
+import { LIMITS } from './limits.ts'
+import { INVITE, readCode } from './lobbyProtocol.ts'
+
+await initPhysics()
+
+// Every check is a test of its own, in order, under its label (the it.each
+// at the end); a failed one fails its test, and the rest still run.
+const checks: Array<[string, boolean]> = []
+const check = (ok: boolean, what: string) => void checks.push([what, ok])
+const near = (a: number, b: number, within: number) => Math.abs(a - b) <= within
+
+// The wire counts the simulation's own steps: a tick on the wire is one fixed step.
+check(RATE.step * PHYSICS_STEP === 1, `RATE.step × PHYSICS_STEP is 1 (${RATE.step} × ${PHYSICS_STEP})`)
+
+// --- what the wire carries -------------------------------------------------------------
+
+const world = createWorld([])
+const car = enlist(world, 3, {
+  name: 'test',
+  team: 1,
+  seed: 4,
+  spawn: { position: new THREE.Vector3(12.3456, 0, -45.6789), heading: 0.7 },
+  vehicle: 'razor',
+  weapon: WEAPONS.rocketPod,
+  bot: false,
+})
+car.car.body.setLinvel({ x: 7.891, y: -0.333, z: -12.345 }, true)
+car.car.body.setAngvel({ x: 0.1234, y: -1.5678, z: 0.0042 }, true)
+car.rotation.set(0.1, 0.3, -0.05, 0.94).normalize()
+car.velocity.copy(car.car.body.linvel() as THREE.Vector3)
+car.health = 63.37
+Object.assign(car.control, { throttle: -1, handbrake: true, fire: true })
+car.control.aim.set(101.119, 2.5, -80.004)
+car.car.steer = -0.41
+car.car.body.setRotation(car.rotation, true)
+
+const row = carRow(car)
+const back = readCar(row)
+check(row.every(Number.isInteger), 'a car row is integers only')
+check(back.id === 3 && back.alive && back.handbrake && back.fire && back.throttle === -1, 'id, flags and throttle come back exactly')
+check(
+  ['x', 'y', 'z'].every((k) => near(back.position[k as 'x'], car.position[k as 'x'], 0.005)),
+  'position within 5 mm',
+)
+check(
+  ['x', 'y', 'z', 'w'].every((k) => near(back.rotation[k as 'x'], car.rotation[k as 'x'], 1e-4)),
+  'rotation within 1e-4 a component',
+)
+check(
+  ['x', 'y', 'z'].every((k) => near(back.velocity[k as 'x'], car.velocity[k as 'x'], 0.005)),
+  'velocity within 5 mm/s',
+)
+check(
+  ['x', 'y', 'z'].every((k) => near(back.aim[k as 'x'], car.control.aim[k as 'x'], 0.005)),
+  'aim within 5 mm',
+)
+check(near(back.health, 63.37, 0.05) && near(back.steer, -0.41, 0.005), 'hull within 0.05, steer within 0.005')
+check(
+  near(back.speed, forwardSpeed(car.car), 0.02),
+  `speed worked out from rotation and velocity (${back.speed.toFixed(3)} vs ${forwardSpeed(car.car).toFixed(3)})`,
+)
+car.alive = false
+check(!readCar(carRow(car)).alive, 'a wreck reads as one')
+check(back.present && (row[12] & 8) === 0, 'a machine in play: no absent flag, the row as it always was')
+car.present = false
+check(!readCar(carRow(car)).present, 'an empty seat reads as one')
+car.present = true
+
+car.weapon.ammo = 4
+car.weapon.reload = 1.2345
+car.stuck = 2.5
+const me = readMe(meRow(car))
+check(
+  near(me.spin.y, -1.5678, 0.001) && near(me.steer, -0.41, 1e-4) && me.ammo === 4 && near(me.reload, 1.2345, 0.001) && near(me.stuck, 2.5, 0.001),
+  'the player’s own row: spin, steer, weapon, timers',
+)
+
+// The snapshot as a binary frame: the same integers as the JSON rows, read back exactly.
+car.alive = true
+const rows = [carRow(car), [7, -45000, 150, 45000, -10000, 10000, 0, -1, -1500, 25, 3200, 1000, 0, -12, 34, -56, 100, -100]]
+const mine = meRow(car)
+const events: WireEvent[] = [
+  ['sh', 88, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 7],
+  ['ru', 88, { kind: 'kill', killer: 3, victim: 7, name: 'Wreckage™' }],
+]
+const frame = packSnapshot(123456, 789, 61234, packCars(rows), mine, packEvents(events))
+const read = unpackSnapshot(frame)
+check(frame[0] === SNAPSHOT && read.t === 's' && read.k === 123456 && read.ack === 789 && read.now === 61234, 'a snapshot frame: its kind, tick, ack and clock')
+check(
+  JSON.stringify(read.cars) === JSON.stringify(rows) && JSON.stringify(read.me) === JSON.stringify(mine),
+  'every machine’s row and the player’s own come back as the very same integers',
+)
+check(JSON.stringify(read.ev) === JSON.stringify(events), 'the events come back whole (JSON after the rows, any text)')
+const quiet = unpackSnapshot(packSnapshot(5, -1, 0, packCars(rows), mine, packEvents([])))
+check(
+  quiet.ev.length === 0 && quiet.ack === -1 && wireSize(packSnapshot(5, -1, 0, packCars(rows), mine, packEvents([]))) === 14 + 2 * 44 + 40,
+  'no events: nothing after the rows; an ack of -1 (no input used yet) holds',
+)
+const offset = new Uint8Array(frame.length + 3)
+offset.set(frame, 3)
+check(
+  unpackSnapshot(offset.subarray(3)).k === 123456 && (readServer(frame.buffer as ArrayBuffer) as { k: number }).k === 123456,
+  'read from a view into a larger buffer (a Node Buffer), or from an ArrayBuffer (a browser)',
+)
+const wild = unpackSnapshot(
+  packSnapshot(1, 0, 0, packCars([[1, 0, 0, 0, 0, 0, 0, 10000, 99999, -99999, 0, 99999, 1, 0, 0, 0, 300, -300]]), mine, packEvents([])),
+).cars[0]
+check(
+  wild[8] === 32767 && wild[9] === -32768 && wild[11] === 32767 && wild[16] === 127 && wild[17] === -128,
+  'out-of-range fields are clamped to their size, not wrapped',
+)
+check((readServer('{"t":"pong","c":1,"k":2}') as { t: string }).t === 'pong', 'text is JSON: every other message')
+let refused = false
+try {
+  unpackSnapshot(new Uint8Array([9, 0, 0]))
+} catch {
+  refused = true
+}
+check(refused, 'a frame that isn’t a snapshot is refused')
+check(
+  wireSize(frame) < JSON.stringify({ t: 's', ack: 789, me: mine, k: 123456, now: 61234, cars: rows, ev: events }).length,
+  'the frame is smaller than the JSON it replaces',
+)
+
+const stats = { ...createStats(), kills: 3, damageDealt: 123.456, combatScore: 461.728 }
+const statsBack = readStats(statsRow(stats), createStats())
+check(statsBack.kills === 3 && near(statsBack.damageDealt, 123.456, 0.005) && near(statsBack.combatScore, 461.728, 0.005), 'statistics within 0.01')
+check(weaponId({ ...WEAPONS.rocketPod, damage: 1 }) === 'rocketPod' && weaponId(WEAPONS.minigun) === 'minigun', 'a scaled bot gun is named by its registry id')
+
+// --- the wire, to the byte -------------------------------------------------------------------
+
+// Fixtures: a snapshot frame (a machine in play, an empty seat's, the
+// player's own row, an event) and the JSON of a welcome to a custom lobby's
+// match, a seat changing hands and an input, as they go out today. Code that
+// moves the wire around leaves them exactly as they are; a change on purpose
+// bumps PROTOCOL and changes them here.
+{
+  const fixed = createWorld([])
+  const start = { position: new THREE.Vector3(), heading: 0 }
+  const inPlay = enlist(fixed, 4, { name: 'in play', team: 0, seed: 5, spawn: start, vehicle: 'razor', weapon: WEAPONS.minigun, bot: false })
+  const empty = enlist(fixed, 9, { name: '', team: 1, seed: 10, spawn: start, vehicle: 'razor', weapon: WEAPONS.rocketPod, bot: false })
+  inPlay.position.set(-31.25, 1.125, 77.125)
+  inPlay.rotation.set(0, 0.6, 0, 0.8)
+  inPlay.velocity.set(400.5, -0.25, 12.75) // flung past ±327 m/s on x: packCars clamps it
+  inPlay.health = 87.5
+  Object.assign(inPlay.control, { throttle: 0.75, handbrake: false, fire: true })
+  inPlay.control.aim.set(-20.5, 2.25, 100.125)
+  inPlay.car.steer = -0.3125
+  inPlay.car.body.setAngvel({ x: 0.25, y: -1.5, z: 0.125 }, true)
+  Object.assign(inPlay.weapon, { ammo: 17, reload: 0, cooldown: 0.0625 })
+  inPlay.stuck = 1.5
+  empty.position.set(64, 0.5, -128.5)
+  empty.rotation.set(0, 0, 0, 1)
+  empty.velocity.set(0, 0, 0)
+  empty.health = 0
+  Object.assign(empty, { alive: false, present: false })
+  Object.assign(empty.control, { throttle: 0, handbrake: false, fire: false })
+  empty.control.aim.set(0, 0, 0)
+  empty.car.steer = 0
+  const frame = packSnapshot(98765, 4321, 123456, packCars([carRow(inPlay), carRow(empty)]), meRow(inPlay), packEvents([['bu', 98764, 120, 50, -340]]))
+  const hex = Array.from(frame, (b) => b.toString(16).padStart(2, '0')).join('')
+  check(
+    hex ===
+      '01cd810100e110000040e201000204cbf3ffff71000000211e0000000070170000401fff7fe7fffb046b0305fef7ffffe10000001d2700004be1090019000032000000cecdffff00000000000010270000000000000000080000000000000000000000000000fa00000024faffff7d000000cbf3ffff0000000011000000000000003f000000dc050000000000005b5b226275222c39383736342c3132302c35302c2d3334305d5d',
+    `a snapshot frame, byte for byte (${hex})`,
+  )
+
+  const custom = checkSettings('tdm', {
+    size: 2,
+    duration: 900,
+    respawn: 'slow',
+    friendlyFire: true,
+    items: { health: true, ammo: false, powerups: true },
+    weapons: 'rocketPod',
+    killLimit: 10,
+  })
+  check(custom.ok, 'the fixture’s settings are a custom lobby’s')
+  const welcome: Welcome = {
+    t: 'welcome',
+    v: PROTOCOL,
+    room: 'r7f3a21',
+    seat: 0,
+    mode: 'tdm',
+    map: 'city',
+    seed: 3141592653,
+    settings: custom.ok ? custom.settings : classic('tdm'),
+    tick: 240,
+    rate: RATE,
+    digest: '8913ad26',
+    lineUp: [
+      { name: 'Guest 1e6f', team: 0, vehicle: 'razor', weapon: 'rocketPod', human: true, uid: 'u-1e6f', present: true },
+      { name: '', team: 1, vehicle: 'razor', weapon: 'rocketPod', human: false, uid: '', present: false },
+    ],
+    chat: { all: `sy-${'0a'.repeat(12)}`, team: `sy-${'1b'.repeat(12)}` },
+    lobby: 'c0ffee12',
+  }
+  check(
+    JSON.stringify(welcome) ===
+      '{"t":"welcome","v":7,"room":"r7f3a21","seat":0,"mode":"tdm","map":"city","seed":3141592653,"settings":{"size":2,"duration":900,"respawn":"slow","friendlyFire":true,"items":{"health":true,"ammo":false,"powerups":true},"weapons":"rocketPod","killLimit":10},"tick":240,"rate":{"step":60,"snap":30},"digest":"8913ad26","lineUp":[{"name":"Guest 1e6f","team":0,"vehicle":"razor","weapon":"rocketPod","human":true,"uid":"u-1e6f","present":true},{"name":"","team":1,"vehicle":"razor","weapon":"rocketPod","human":false,"uid":"","present":false}],"chat":{"all":"sy-0a0a0a0a0a0a0a0a0a0a0a0a","team":"sy-1b1b1b1b1b1b1b1b1b1b1b1b"},"lobby":"c0ffee12"}',
+    `a welcome to a custom lobby’s match, as JSON (${JSON.stringify(welcome)})`,
+  )
+  const ro: ServerMessage = { t: 'ro', seat: 1, name: 'Guest 1e6f', human: true, weapon: 'minigun', vehicle: 'razor', uid: 'u-1e6f', present: true }
+  check(
+    JSON.stringify(ro) === '{"t":"ro","seat":1,"name":"Guest 1e6f","human":true,"weapon":"minigun","vehicle":"razor","uid":"u-1e6f","present":true}',
+    `a seat changing hands, as JSON (${JSON.stringify(ro)})`,
+  )
+  const typed = inputMessage(77, { throttle: -0.5, steer: 0.25, handbrake: true, fire: false, recover: true, aim: { x: -12.345, y: 1.5, z: 99.999 } }, 4321)
+  check(typed === '{"t":"in","s":77,"th":-50,"st":25,"hb":1,"f":0,"r":1,"a":[-1234,150,10000],"w":4321}', `an input, as JSON (${typed})`)
+  fixed.free()
+}
+
+// --- input: what a client sends, what the server reads -------------------------------------------
+
+const control = { throttle: 1, steer: -0.5, handbrake: false, fire: true, recover: false, aim: new THREE.Vector3(10.004, 1.5, -3.2) }
+const sent = inputMessage(42, control, 900)
+check(sent.length <= 120, `an input is small (${sent.length} bytes)`)
+const parsed = parseClient(sent)
+check(parsed.ok && parsed.message.t === 'in', 'an input parses')
+const input = (parsed.ok ? parsed.message : null) as Input
+check(input.seq === 42 && input.throttle === 1 && input.steer === -0.5 && input.fire && !input.handbrake && input.view === 900, 'an input comes back whole')
+check(near(input.aim.x, 10.004, 0.005) && near(input.aim.z, -3.2, 0.005), 'its aim within 5 mm')
+
+const raw = (fields: Record<string, unknown>) => JSON.stringify({ t: 'in', s: 1, th: 0, st: 0, hb: 0, f: 0, r: 0, a: [0, 0, 0], w: 0, ...fields })
+const parse = (text: string) => {
+  const result = parseClient(text)
+  return result.ok ? (result.message as Input) : null
+}
+check(parse(raw({ th: 5000, st: -5000 }))?.throttle === 1 && parse(raw({ th: 5000, st: -5000 }))?.steer === -1, 'throttle and steer are clamped to [-1, 1]')
+check(parse(raw({ hb: 'yes', f: 7, r: [] }))?.handbrake === true && parse(raw({ hb: 0, f: null }))?.fire === false, 'flags are coerced to booleans')
+const infinite = (field: string) => raw({ [field]: 0 }).replace(`"${field}":0`, `"${field}":1e999`) // JSON.parse reads 1e999 as Infinity
+check(
+  ['th', 'st', 'w'].every((field) => JSON.parse(infinite(field))[field] === Infinity && parse(infinite(field)) === null),
+  'Infinity is refused',
+)
+check(
+  parse(raw({ th: null })) === null && parse(raw({ th: '1' })) === null && parse(raw({ w: undefined })) === null,
+  'a missing or non-number control is refused',
+)
+check(
+  parse(raw({ a: [0, 0] })) === null && parse(raw({ a: [0, 0, 7] }).replace('[0,0,7]', '[0,0,-1e999]')) === null && parse(raw({ a: 'here' })) === null,
+  'an aim that is not three finite numbers is refused',
+)
+check(parse(raw({ s: -1 })) === null && parse(raw({ s: 1.5 })) === null && parse(raw({ s: 2 ** 60 })) === null, 'a seq must be a whole number ≥ 0')
+const forged = parse(raw({ health: 100, position: [0, 0, 0], damage: 999, kill: 3, ammo: 60, alive: true }))
+check(
+  forged !== null && Object.keys(forged).sort().join() === 'aim,fire,handbrake,recover,seq,steer,t,throttle,view',
+  'fields besides the controls are left behind',
+)
+check(parse(raw({ a: [1e9, -1e9, 5e8] }))?.aim.x === 10000, 'a wild aim is pulled in before the room clamps it to range')
+check(!parseClient(raw({ pad: 'x'.repeat(LIMITS.input) })).ok, 'an input over 1 KB is refused')
+check(!parseClient('{"t":"hello"}', LIMITS.hello + 1).ok, 'anything over 4 KB is refused')
+
+// --- the other messages -----------------------------------------------------------------
+
+const hello = parseClient(
+  JSON.stringify({ t: 'hello', v: 1, token: 'a.b.c', guest: 1, mode: 'ffa', map: 'city', loadout: { vehicle: 'tank', weapon: 'railgun' }, admin: true }),
+)
+check(
+  hello.ok && hello.message.t === 'hello' && hello.message.guest && hello.message.loadout.vehicle === 'razor' && hello.message.loadout.weapon === 'minigun',
+  'unknown loadout ids get the defaults',
+)
+check(hello.ok && !('admin' in hello.message), 'a hello keeps only its own fields')
+const good = parseClient(JSON.stringify({ t: 'hello', v: 1, token: 't', mode: 'tdm', map: 'scrapyard', loadout: { vehicle: 'razor', weapon: 'rocketPod' } }))
+check(good.ok && good.message.t === 'hello' && good.message.loadout.weapon === 'rocketPod', 'a known loadout is kept')
+check(!parseClient(JSON.stringify({ t: 'hello', v: 1, token: '', mode: 'ffa', map: 'city' })).ok, 'a hello needs a token')
+check(!parseClient(JSON.stringify({ t: 'hello', v: 1, token: 'x'.repeat(LIMITS.token + 1), mode: 'ffa', map: 'city' })).ok, 'a token has a length limit')
+check(!parseClient(JSON.stringify({ t: 'hello', v: 1, token: 't', mode: 'x'.repeat(40), map: 'city' })).ok, 'mode and map have a length limit')
+const built = parseClient(JSON.stringify({ t: 'hello', v: 2, build: '0123456789ab', token: 't', mode: 'ffa', map: 'city' }))
+check(built.ok && built.message.t === 'hello' && built.message.build === '0123456789ab', 'a hello carries its build')
+for (const build of [undefined, 42, '', 'x'.repeat(LIMITS.build + 1)]) {
+  const odd = parseClient(JSON.stringify({ t: 'hello', v: 2, build, token: 't', mode: 'ffa', map: 'city' }))
+  check(
+    odd.ok && odd.message.t === 'hello' && odd.message.build === '',
+    `a hello with no build, or a wrong kind (${JSON.stringify(build)?.slice(0, 12)}), is kept, as no build at all: the server tells that page to reload`,
+  )
+}
+check(BUILD === 'dev', 'under the unit tests there is no build id: dev')
+const session = parseClient(JSON.stringify({ t: 'hello', v: 3, build: 'b', token: 't', loadout: {} }))
+check(
+  session.ok && session.message.t === 'hello' && session.message.mode === '' && session.message.map === '',
+  'a hello without mode and map is kept (a matchmaking session), both as empty',
+)
+check(
+  !parseClient(JSON.stringify({ t: 'hello', v: 3, token: 't', mode: 7, map: 'city' })).ok &&
+    !parseClient(JSON.stringify({ t: 'hello', v: 3, token: 't', map: ['city'] })).ok,
+  'a mode or map of the wrong kind is refused',
+)
+
+// --- matchmaking ----------------------------------------------------------------------------
+
+const queue = (message: object) => parseClient(JSON.stringify({ t: 'mm', ...message }))
+const search = queue({ do: 'search', mode: 'tdm', map: 'city', uid: 'someone-else', createdAt: 0, id: 'p1' })
+check(
+  search.ok && JSON.stringify(search.message) === '{"t":"mm","do":"search","mode":"tdm","map":"city","id":"p1"}',
+  'a search keeps its action, mode, map and id only: never a player id or a time',
+)
+check(!queue({ do: 'search', map: 'city' }).ok && !queue({ do: 'search', mode: '', map: 'city' }).ok, 'a search needs its mode')
+check(!queue({ do: 'search', mode: 'tdm' }).ok && !queue({ do: 'search', mode: 'tdm', map: 7 }).ok, 'and its arena')
+check(
+  queue({ do: 'accept', id: 'p12' }).ok && queue({ do: 'decline', id: 'p12' }).ok && !queue({ do: 'accept' }).ok && !queue({ do: 'decline', id: 5 }).ok,
+  'an answer needs the proposal it answers',
+)
+check(queue({ do: 'cancel' }).ok && queue({ do: 'state' }).ok, 'cancel and state need nothing else')
+check(!queue({ do: 'start' }).ok && !queue({}).ok && !queue({ do: 'accept', id: 'x'.repeat(40) }).ok, 'an unknown action, none, or an overlong id is refused')
+check(!parseClient(JSON.stringify({ t: 'mm', do: 'state', pad: 'x'.repeat(2000) })).ok, 'a queue message is small')
+check(parseClient('{"t":"ping","c":12.5}').ok && !parseClient('{"t":"ping"}').ok, 'a ping needs its time')
+check(parseClient('{"t":"bye"}').ok, 'bye')
+for (const junk of ['nope', '[]', 'null', '42', '{"t":"shoot"}', '{"t":"state"}', '{}']) check(!parseClient(junk).ok, `refused: ${junk}`)
+
+// --- the room's rules ------------------------------------------------------------------------
+
+const from = new THREE.Vector3(0, 1, 0)
+const far = clampAim({ x: 10000, y: 1, z: 0 }, from, WEAPONS.minigun.range)
+check(near(Math.hypot(far.x - from.x, far.y - from.y, far.z - from.z), WEAPONS.minigun.range + AIM_MARGIN, 1e-6), 'an aim 10 km away is pulled in to the range')
+check(clampAim({ x: 20, y: -50, z: 0 }, from, 160).y === -1, 'an aim deep underground is lifted to 1 m below')
+const close = clampAim({ x: 30, y: 2, z: -40 }, from, 160)
+check(close.x === 30 && close.y === 2 && close.z === -40, 'an aim within range is left alone')
+check(clampView(100, 500) === 500 - REWIND && clampView(900, 500) === 500 && clampView(495.4, 500) === 495, 'the tick a player sees is held to the last 200 ms')
+check(acceptSeq(5, 6) && !acceptSeq(5, 5) && !acceptSeq(5, 4), 'seqs only move forward')
+
+world.free()
+// --- custom lobbies: the settings validator, and every lobby message's rules -----------------------------------
+{
+  const tdm = {
+    ...classic('tdm'),
+    size: 12,
+    duration: 1800,
+    respawn: 'fast',
+    friendlyFire: true,
+    items: { health: true, ammo: false, powerups: true },
+    weapons: 'rocketPod',
+    killLimit: 25,
+  }
+  const ok = checkSettings('tdm', { ...tdm, extra: 'nothing' })
+  check(ok.ok && JSON.stringify(ok.settings) === JSON.stringify(tdm), 'a custom lobby’s settings pass whole, and nothing unnamed gets through')
+  check(checkSettings('ffa', classic('ffa')).ok && checkSettings('tdm', classic('tdm')).ok, 'Classic’s own settings are custom ones too')
+  const bad = checkSettings('tdm', {
+    ...tdm,
+    size: 7,
+    duration: 61,
+    respawn: 'warp',
+    friendlyFire: 'yes',
+    items: { health: 1 },
+    weapons: 'laser',
+    killLimit: 3,
+  })
+  check(!bad.ok && Object.keys(bad.errors).length === 7, 'every field out of range or of the wrong type named, each once')
+  const ffaFriendly = checkSettings('ffa', { ...classic('ffa'), friendlyFire: true })
+  check(!ffaFriendly.ok && !!ffaFriendly.errors.friendlyFire, 'friendly fire is for team deathmatch')
+  check(!checkSettings('tdm', null).ok && !checkSettings('ffa', 'x').ok, 'no settings at all: refused')
+
+  const lb = (fields: Record<string, unknown>) => parseClient(JSON.stringify({ t: 'lb', ...fields }))
+  const form = { name: 'Friday night', open: true, password: 'hunter22', mode: 'tdm', map: 'city', settings: tdm, jip: true }
+  const made = lb({ do: 'create', ...form, sneaky: 1 })
+  check(
+    made.ok && made.message.t === 'lb' && made.message.do === 'create' && JSON.stringify(made.message.form) === JSON.stringify(form),
+    'create: the form whole, nothing else',
+  )
+  const kept = lb({ do: 'edit', ...form, password: null })
+  check(kept.ok && kept.message.t === 'lb' && kept.message.do === 'edit' && kept.message.form.password === null, 'edit: a password left as it was (null)')
+  check(
+    [
+      { ...form, name: '' },
+      { ...form, name: 'x'.repeat(LIMITS.lobby + 1) },
+      { ...form, open: 'yes' },
+      { ...form, password: 'x'.repeat(LIMITS.password + 1) },
+      { ...form, mode: 'derby' },
+      { ...form, map: '' },
+      { ...form, settings: { ...tdm, size: 13 } },
+      { ...form, jip: 1 },
+    ].every((f) => !lb({ do: 'create', ...f }).ok),
+    'create: a bad name, flag, password, mode, map or setting is refused',
+  )
+  const joined = lb({ do: 'join', id: 'a1b2c3d4' })
+  check(joined.ok && joined.message.t === 'lb' && joined.message.do === 'join' && joined.message.password === '', 'join: an id, no password means none')
+  check(!lb({ do: 'join', id: '' }).ok && !lb({ do: 'join', id: 'x'.repeat(LIMITS.code + 1) }).ok, 'join: an id that can’t be one is refused')
+  check(
+    lb({ do: 'code', code: 'AB12CD34' }).ok &&
+      !lb({ do: 'code', code: 'AB12CD3' }).ok &&
+      !lb({ do: 'code', code: 'AB12CD3I' }).ok &&
+      !lb({ do: 'code', code: 'ab12cd34' }).ok,
+    'code: eight Crockford base32 characters (no I, L, O or U), as the page sends it',
+  )
+  check(
+    readCode('ab1o-cd3l ') === 'AB10CD31' && INVITE.test(readCode('ab1o-cd3l ')) && !INVITE.test(readCode('ab1u-cd3l')),
+    'a code as typed or in a link: case, dashes and spaces dropped, O, I and L read as digits; U stays wrong',
+  )
+  check(lb({ do: 'ready', on: false }).ok && !lb({ do: 'ready', on: 'no' }).ok, 'ready: a flag')
+  check(
+    lb({ do: 'slot', slot: 11 }).ok && !lb({ do: 'slot', slot: 12 }).ok && !lb({ do: 'slot', slot: 1.5 }).ok && !lb({ do: 'unbot', slot: -1 }).ok,
+    'slot, unbot: a whole number of a slot, 0 to 11',
+  )
+  check(lb({ do: 'bot', slot: 3, skill: 'hard' }).ok && !lb({ do: 'bot', slot: 3, skill: 'godlike' }).ok, 'bot: a slot and a difficulty there is')
+  check(
+    lb({ do: 'kick', uid: 'u-1' }).ok && !lb({ do: 'owner', uid: '' }).ok && !lb({ do: 'kick', uid: 'x'.repeat(LIMITS.uid + 1) }).ok,
+    'kick, owner: a user id',
+  )
+  check(
+    ['watch', 'unwatch', 'leave', 'start', 'reset', 'play', 'wait'].every((act) => lb({ do: act }).ok) && !lb({ do: 'dance' }).ok,
+    'the actions with no fields; one that isn’t an action is refused',
+  )
+  check(
+    !parseClient(JSON.stringify({ t: 'lb', do: 'create', ...form, name: 'x'.repeat(30), pad: 'x'.repeat(LIMITS.input) })).ok,
+    'a lobby message over the input limit is refused',
+  )
+}
+
+describe('protocol', () => {
+  it.each(checks)('%s', (_, ok) => expect(ok).toBe(true))
+})

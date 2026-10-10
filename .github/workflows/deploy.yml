@@ -143,8 +143,8 @@ jobs:
           echo "$changes"
           # the site: only what changed travels; deploy.sh snapshots it as release $SHA
           send --delete --mkpath www/dist/ "vm:$home/scrapyard/site/incoming/"
-          # the game server: the bundle main.js runs, without the bundled self-checks
-          server=$(send --delete --mkpath --exclude '*.check.js' --exclude load.js game/dist-server/ "vm:$home/scrapyard/server/incoming/")
+          # the game server: the bundle main.js runs (and replay.js, the replays' runner), without the capacity tool
+          server=$(send --delete --mkpath --exclude load.js game/dist-server/ "vm:$home/scrapyard/server/incoming/")
           echo "$server"
           # Only the site is switched; Nakama restarts (dropping live matches) only when a file it
           # reads changed on the server, the game server (dropping online matches) only when its

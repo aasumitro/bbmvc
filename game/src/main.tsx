@@ -1,7 +1,7 @@
 import { StrictMode, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import { Notice } from './screens/Notice'
+import { Notice } from './screens/Notice.tsx'
 
 // Game-style pointer: menus are driven from the keyboard, so the cursor stays
 // hidden until the mouse actually moves, and hides again after a short idle
@@ -24,7 +24,7 @@ const show = (screen: ReactNode) => root.render(<StrictMode>{screen}</StrictMode
 // never downloads the game: App and everything it loads come in a chunk of
 // their own. A tablet with a trackpad passes.
 if (matchMedia('(any-pointer: fine)').matches)
-  import('./App').then(
+  import('./App.tsx').then(
     ({ default: App }) => show(<App />),
     (error: unknown) => {
       console.error('The game failed to load:', error)

@@ -7,11 +7,14 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "check": "node src/game/ai.check.ts && node src/game/bots.check.ts && node src/game/ffa/ffa.check.ts && node src/game/tdm/tdm.check.ts && node src/game/simulation.check.ts && node src/game/loading.check.ts && node src/net/protocol.check.ts && node src/net/chat.check.ts && node server/matchmaker.check.ts && node server/custom.check.ts && node server/fairplay.check.ts && npm run server:check",
+    "format": "prettier --write src server \"*.ts\"",
+    "format:check": "prettier --check src server \"*.ts\"",
     "preview": "vite preview",
     "server": "npm run server:build && node dist-server/main.js",
     "server:build": "vite build --config vite.server.config.ts",
-    "server:check": "npm run server:build && node --expose-gc dist-server/arena.check.js && node dist-server/server.check.js && node --experimental-webstorage dist-server/client.check.js && node dist-server/netplay.check.js"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.20.0",
@@ -29,7 +32,10 @@
     "@types/three": "^0.186.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.1.1",
+    "@vitest/coverage-v8": "^5.0.2",
     "oxlint": "^1.81.0",
+    "prettier": "^3.9.9",
+    "prettier-plugin-tailwindcss": "^0.8.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",

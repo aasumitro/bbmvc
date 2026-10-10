@@ -114,7 +114,13 @@ const ENTRIES = [
   },
   {
     version: '0.2.0',
-    notes: ['First playable match: you against three bots in the Scrapyard', 'Physics driving, chase camera, roof minigun', 'Combat HUD: compass, minimap, speed, health, ammo', 'Arena modes: Training against bots; Team Deathmatch and Free for All coming soon', 'Synthesized sound: engines, gunfire, impacts, explosions, skids, fire, wind'],
+    notes: [
+      'First playable match: you against three bots in the Scrapyard',
+      'Physics driving, chase camera, roof minigun',
+      'Combat HUD: compass, minimap, speed, health, ammo',
+      'Arena modes: Training against bots; Team Deathmatch and Free for All coming soon',
+      'Synthesized sound: engines, gunfire, impacts, explosions, skids, fire, wind',
+    ],
   },
   {
     version: '0.1.0',
@@ -134,12 +140,21 @@ export function PatchNotesPanel() {
         const expanded = entry.version === open
         return (
           <div key={entry.version} className="border-b border-white/10">
-            <button aria-expanded={expanded} aria-controls={`notes-${entry.version}`} onClick={() => setOpen(expanded ? '' : entry.version)} className="flex w-full items-center justify-between py-4 text-left">
+            <button
+              aria-expanded={expanded}
+              aria-controls={`notes-${entry.version}`}
+              onClick={() => setOpen(expanded ? '' : entry.version)}
+              className="flex w-full items-center justify-between py-4 text-left"
+            >
               <span className={`flex items-center gap-3 text-xs font-bold tracking-[0.2em] uppercase ${expanded ? 'text-red-400' : 'text-red-400/80'}`}>
                 v{entry.version}
                 {i === 0 && <span className="rounded border border-red-500/50 px-1.5 py-0.5 text-[0.6rem] tracking-[0.15em] text-red-300">Latest</span>}
               </span>
-              <svg viewBox="0 0 10 10" className={`h-2.5 w-2.5 fill-none stroke-neutral-500 transition-transform duration-300 ${expanded ? 'rotate-90' : ''}`} strokeWidth="1.5">
+              <svg
+                viewBox="0 0 10 10"
+                className={`h-2.5 w-2.5 fill-none stroke-neutral-500 transition-transform duration-300 ${expanded ? 'rotate-90' : ''}`}
+                strokeWidth="1.5"
+              >
                 <path d="M3 1l4 4-4 4" />
               </svg>
             </button>

@@ -22,7 +22,7 @@ What really ran, and when:
 
 | Work | When it ran | Cost (measured) |
 | --- | --- | --- |
-| Rapier WASM (`RAPIER.init()`) | at import of `physics.ts`, unawaited until the first match | ~15 ms |
+| Rapier WASM (`RAPIER.init()`) | at import of `sim/physics.ts`, unawaited until the first match | ~15 ms |
 | Google Fonts, `/bg/loading.jpg` | page load, not awaited | network |
 | menu backdrop `/bg/menu.jpg` (556 kB) | only when the menu mounted: it popped in | network |
 | WebGL context (`getRenderer()`) | first garage visit, or first match | ~14 ms |
@@ -41,13 +41,13 @@ unhandled rejection in the console.
 
 ## Loading architecture
 
-One small module owns loading: `game/loading.ts`.
+One small module owns loading: `runtime/loading.ts`.
 
 ```
 screens/Loading.tsx ── runTasks(STARTUP) ──┐
-                                           ├── game/loading.ts   runTasks: in order, progress per finished task,
-screens/GameCanvas.tsx ── startGame() ─────┤                     a paint before each task, cancel, first failure
-                          game/runtime.ts ─┘                     STARTUP: what the main menu waits for
+                                           ├── runtime/loading.ts   runTasks: in order, progress per finished task,
+screens/GameCanvas.tsx ── startGame() ─────┤                        a paint before each task, cancel, first failure
+                       runtime/runtime.ts ─┘                        STARTUP: what the main menu waits for
                           runTasks([match steps])
 ```
 
@@ -68,7 +68,7 @@ screens/GameCanvas.tsx ── startGame() ─────┤                    
   runner waited for, and the frame before a long step showed the previous
   step's label (found in the browser, fixed, covered by the check).
 - `STARTUP` is the application's startup list (below). `startGame`
-  (`game/runtime.ts`) runs the match's own list through the same runner.
+  (`runtime/runtime.ts`) runs the match's own list through the same runner.
 - The screens hold no loading logic: they show the reports and the failure.
 
 Loading and initialization stay distinct inside the lists: the startup
@@ -87,12 +87,12 @@ anywhere in either path.
 
 ## Startup tasks
 
-What the main menu waits for (`STARTUP` in `game/loading.ts`):
+What the main menu waits for (`STARTUP` in `runtime/loading.ts`):
 
 | # | Label | Work | Why before the menu | On failure |
 | --- | --- | --- | --- | --- |
-| 1 | Starting physics | `initPhysics()` (`physics.ts`): Rapier's WASM module, started once | every match needs it; a browser that can't run it should say so now, not after the player picked a car and an arena | fatal: error, Retry |
-| 2 | Starting graphics | `getRenderer()` (`renderer.ts`): the app's one WebGL renderer and context | the garage and every match need it; before this pass a browser without WebGL crashed the garage screen (blank page) | fatal: error, Retry |
+| 1 | Starting physics | `initPhysics()` (`sim/physics.ts`): Rapier's WASM module, started once (in the page's build a file of its own, fetched and compiled as it streams in: `vite.config.ts`; the dev server and Node have it inline) | every match needs it; a browser that can't run it should say so now, not after the player picked a car and an arena | fatal: error, Retry |
+| 2 | Starting graphics | `getRenderer()` (`render/renderer.ts`): the app's one WebGL renderer and context | the garage and every match need it; before this pass a browser without WebGL crashed the garage screen (blank page) | fatal: error, Retry |
 | 3 | Loading the menu | the menu backdrop (`MENU_BACKDROP`, load event) and `document.fonts.ready` | the menu is drawn with them; without, it opened on system fonts and the picture popped in | cosmetic: a backdrop failure is logged (`console.warn`) and the menu opens on its dark ground; fonts that fail fall back by themselves |
 
 `MENU_BACKDROP` is also what the menu, garage and arena select draw
@@ -109,11 +109,11 @@ Loaded when something first needs them, never at startup:
 
 | Resource | Loaded by | When |
 | --- | --- | --- |
-| sky environment map | `addSunsetLighting` (`environment.ts`) | first garage visit or first match; kept for the session |
-| garage car, its materials and shaders | `createTurntable` → `MODELS[id]` (`turntable.ts`) | each garage visit; materials, baked textures and programs are session caches, the car geometry is rebuilt (~45 ms) |
-| an arena | `loadArena(id)` (`maps.ts`) | the first match on that arena; kept for the session |
-| sound buffers | `prepareSounds()` (`audio.ts`) | the first match; kept for the session (the menus play no sound) |
-| the match (world, cars, effects, composer) | `createMatch`, `createComposer` (in `startGame`) | every match; released at its end |
+| sky environment map | `addSunsetLighting` (`render/environment.ts`) | first garage visit or first match; kept for the session |
+| garage car, its materials and shaders | `createTurntable` → `MODELS[id]` (`view/turntable.ts`) | each garage visit; materials, baked textures and programs are session caches, the car geometry is rebuilt (~45 ms) |
+| an arena | `loadArena(id)` (`runtime/runtime.ts`) | the first match on that arena; kept for the session |
+| sound buffers | `prepareSounds()` (`view/audio.ts`) | the first match; kept for the session (the menus play no sound) |
+| the match (world, cars, effects, composer) | `createMatch` or `createOnlineMatch`, `createComposer` (in `startGame`) | every match; released at its end |
 | arena preview images | `<img>` in `MapSelect.tsx` | when the arena select shows them |
 
 Nothing loads every map or vehicle up front. Checked in the browser: after
@@ -174,13 +174,13 @@ physics step passing at once → menu.
 
 | Resource | Made by | When | Released |
 | --- | --- | --- | --- |
-| Rapier WASM module | `initPhysics` (`physics.ts`) | startup | never (session) |
-| WebGL renderer and context | `getRenderer` (`renderer.ts`) | startup | never (session) |
-| sky environment map, sky dome | `environment.ts` | first garage visit or match | never (session) |
-| materials, baked textures | `materials/library.ts` | first use | never (session) |
-| arena meshes and colliders | `loadArena` (`maps.ts`) | first match on the arena | never (session cache) |
-| sound buffers | `prepareSounds` (`audio.ts`) | first match | never (session) |
-| scene, sun, match, composer, settings watcher | `startGame`'s `assemble` (`runtime.ts`) | each match start ("Setting up the match") | `startGame().dispose` → `release`: all of it once running, and whatever exists after a failed or abandoned start |
+| Rapier WASM module | `initPhysics` (`sim/physics.ts`) | startup | never (session) |
+| WebGL renderer and context | `getRenderer` (`render/renderer.ts`) | startup | never (session) |
+| sky environment map, sky dome | `render/environment.ts` | first garage visit or match | never (session) |
+| materials, baked textures | `render/materials/library.ts` | first use | never (session) |
+| arena meshes and colliders | `loadArena` (`runtime/runtime.ts`) | first match on the arena | never (session cache) |
+| sound buffers | `prepareSounds` (`view/audio.ts`) | first match | never (session) |
+| scene, sun, match, composer, settings watcher | `startGame`'s `assemble` (`runtime/runtime.ts`) | each match start ("Setting up the match") | `startGame().dispose` → `release`: all of it once running, and whatever exists after a failed or abandoned start |
 | render loop, dev globals | `startGame` | after the last step | `startGame().dispose` |
 | garage scene, car, controls | `createTurntable` | each garage visit | `turntable.dispose` |
 | loading progress and failure (React state) | `Loading.tsx`, `GameCanvas.tsx`, fed by `runTasks` | while loading | with the screen |
@@ -213,6 +213,9 @@ running.
   garage may never be visited before a match.
 
 ## Validation
+
+What ran when the loading work landed (the check scripts have since become
+Vitest tests: `game/loading.check.ts` is `src/runtime/loading.test.ts`).
 
 - check: pass — `router ok`, `ffa ok (143 checks)`, `tdm ok (163 checks)`,
   `simulation ok (28 checks)`, `loading ok (23 checks)` (new,

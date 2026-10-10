@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
-import { playSound, prepareSounds } from '../game/audio'
-import { MAPS, type MapId } from '../game/maps'
-import { MODES, type Mode } from '../game/modes'
-import { answer, cancelSearch, type Search } from '../net/matchmaking'
-import { ActionButton } from './Menu'
-import { useClock, useSearch, waited } from './search'
+import { playSound, prepareSounds } from '../view/audio.ts'
+import { MAPS, type MapId } from '../content/arenas/maps.ts'
+import { MODES } from '../modes/modes.ts'
+import type { Mode } from '../modes/ids.ts'
+import { answer, cancelSearch, type Search } from '../net/matchmaking.ts'
+import { ActionButton } from './Menu.tsx'
+import { useClock, useSearch, waited } from './hooks.ts'
 
 // Classic's matchmaking over every screen (net/matchmaking.ts is the store):
 // the ready check when a match is found — over the arena screen, the menus
@@ -54,9 +55,20 @@ function ReadyCheck({ search }: { search: Found }) {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
 
-  const dots = Array.from({ length: search.size }, (_, i) => (i < search.accepted ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : i < search.accepted + search.declined ? 'bg-red-500' : 'border border-white/40'))
+  const dots = Array.from({ length: search.size }, (_, i) =>
+    i < search.accepted
+      ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
+      : i < search.accepted + search.declined
+        ? 'bg-red-500'
+        : 'border border-white/40',
+  )
   return (
-    <div role="alertdialog" aria-labelledby="found-title" aria-describedby="found-line" className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 text-[#f2ece0]">
+    <div
+      role="alertdialog"
+      aria-labelledby="found-title"
+      aria-describedby="found-line"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 text-[#f2ece0]"
+    >
       <div className="w-[min(92vw,480px)] border border-red-500/60 bg-[#12161f] px-9 py-8 shadow-[0_24px_70px_rgba(0,0,0,0.65)]">
         <p className="text-xs font-bold tracking-[0.3em] text-red-400 uppercase">{modeName(search.mode)} · Online</p>
         <h2 id="found-title" className="m-0 mt-2 font-display text-5xl font-semibold">
@@ -72,7 +84,10 @@ function ReadyCheck({ search }: { search: Found }) {
           ))}
         </div>
         <div className="mt-5 h-1 overflow-hidden bg-white/10">
-          <div className="h-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)] transition-[width] duration-100 ease-linear" style={{ width: `${(left / search.of) * 100}%` }} />
+          <div
+            className="h-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)] transition-[width] duration-100 ease-linear"
+            style={{ width: `${(left / search.of) * 100}%` }}
+          />
         </div>
         <p className="mt-2 text-right text-xs font-bold tracking-[0.2em] text-neutral-400 tabular-nums">{Math.ceil(left / 1000)} s</p>
         {accepted ? (
@@ -90,7 +105,7 @@ function ReadyCheck({ search }: { search: Found }) {
             <ActionButton title="Decline" line="N" onClick={search.answered ? undefined : () => answer(false)} />
           </div>
         )}
-        <div className="mt-6 flex items-center gap-4 text-xs tracking-[0.1em] text-neutral-400 uppercase">
+        <div className="mt-6 flex items-center gap-4 text-xs tracking-widest text-neutral-400 uppercase">
           <span className={keycap}>Enter</span>
           <span>Accept</span>
           <span className={keycap}>N</span>
@@ -107,7 +122,10 @@ function Searching({ search, inGame }: { search: Extract<Search, { phase: 'conne
   const now = useClock(true)
   const text = search.phase === 'connecting' ? 'Connecting…' : search.away ? 'Reconnecting…' : `Finding players · ${waited(Math.max(0, now - search.since))}`
   return (
-    <div role="status" className={`fixed z-30 flex items-center gap-3 rounded border border-white/15 bg-black/65 px-4 py-2 text-xs font-bold tracking-[0.2em] whitespace-nowrap text-neutral-200 uppercase backdrop-blur-md ${inGame ? 'top-1/2 right-[2.2vw] -translate-y-1/2' : 'top-4 left-1/2 -translate-x-1/2'}`}>
+    <div
+      role="status"
+      className={`fixed z-30 flex items-center gap-3 rounded border border-white/15 bg-black/65 px-4 py-2 text-xs font-bold tracking-[0.2em] whitespace-nowrap text-neutral-200 uppercase backdrop-blur-md ${inGame ? 'top-1/2 right-[2.2vw] -translate-y-1/2' : 'top-4 left-1/2 -translate-x-1/2'}`}
+    >
       <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
       <span className="text-red-400">
         {modeName(search.mode)} · {mapName(search.map)}
@@ -125,7 +143,10 @@ function Note({ search }: { search: Search }) {
   const note = search.phase === 'idle' || search.phase === 'searching' ? search.note : ''
   if (!note) return null
   return (
-    <p role="status" className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 rounded border border-white/15 bg-black/75 px-5 py-2.5 font-display text-base whitespace-nowrap text-neutral-100 italic backdrop-blur-md">
+    <p
+      role="status"
+      className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 rounded border border-white/15 bg-black/75 px-5 py-2.5 font-display text-base whitespace-nowrap text-neutral-100 italic backdrop-blur-md"
+    >
       {note}
     </p>
   )

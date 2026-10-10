@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 // and a live token are all it takes — which also means a logout isn't seen
 // here until the token runs out (two hours: a known limit).
 
-export interface Identity {
+interface Identity {
   uid: string
   username: string
   expires: number // seconds since the epoch
@@ -50,7 +50,7 @@ export function verifyToken(token: string, key: string, now = Date.now() / 1000)
 // hello says so) as Guest and the end of its user id.
 export const playerName = ({ uid, username }: Identity, guest: boolean) => (guest ? `Guest ${uid.slice(-4)}` : username.slice(0, 20))
 
-// A token as Nakama would sign it — for the self-checks, which run with no Nakama.
+// A token as Nakama would sign it — for the tests, which run with no Nakama.
 export function mintToken(claims: { uid: string; usn: string; exp: number }, key: string, alg = 'HS256') {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
   const header = part({ alg, typ: 'JWT' })

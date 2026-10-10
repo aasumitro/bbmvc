@@ -5,16 +5,12 @@ import { buildId } from './build-id.ts'
 // with everything it imports — the browser's own simulation, modes, bots,
 // arenas and registries, Three.js, Rapier (its WASM is inline) and ws — so
 // dist-server/ runs with plain `node` and nothing installed next to it.
-// Vite, not plain node, because the shared code imports without file
-// extensions and reads import.meta.env. The bundled self-checks build with it.
+// Vite, not plain node, because the shared code reads import.meta.env and
+// __BUILD__. The capacity tool and the replay runner build with it.
 // __BUILD__ is the build id (build-id.ts): the pages the server lets in.
 
 const ENTRIES = {
   main: 'server/main.ts',
-  'arena.check': 'server/arena.check.ts',
-  'server.check': 'server/server.check.ts',
-  'client.check': 'server/client.check.ts',
-  'netplay.check': 'server/netplay.check.ts',
   load: 'server/load.ts',
   replay: 'server/replay-main.ts',
 }

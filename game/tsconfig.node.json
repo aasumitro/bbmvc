@@ -19,5 +19,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vite.config.ts", "vite.server.config.ts", "build-id.ts"]
+  "include": ["vite.config.ts", "vite.server.config.ts", "vitest.config.ts", "build-id.ts", "repo.test.ts"]
 }
