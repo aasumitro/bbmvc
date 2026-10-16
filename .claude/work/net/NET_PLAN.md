@@ -191,6 +191,16 @@ Small rules changes this needs. None changes a gameplay number; the checks prove
 
 ## 4. Protocol (`src/net/protocol.ts`, `PROTOCOL = 2`)
 
+> This section is the plan as the online phase wrote it, at `PROTOCOL` 2.
+> The wire as it stands is `src/net/protocol.ts` and `src/net/events.ts`
+> (`PROTOCOL` 9), whose tests pin it to the byte. Since this plan: the
+> snapshot went binary and the welcome grew a match's settings, chat
+> channels and a lobby (`.claude/work/nakama-mm/`, `.claude/work/custom/`);
+> the content phase (`.claude/work/content/LOG.md`, steps 7 and 8) added
+> `lk` to the input (the seat a missile locks on), the lock's target and
+> time to the player's own row, the events `ml` and `mg` (a mine laid,
+> a mine gone) and the welcome's `mines`.
+
 Every message is a JSON object with `t` (its type).
 
 **Versions.** A page and a server play together only if they were built

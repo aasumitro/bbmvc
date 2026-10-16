@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { startAnalytics } from '../analytics'
-import { MENU_BACKDROP } from '../game/loading'
-import { player, type Player } from '../net/session'
-import { Drawer } from './Drawer'
-import { Menu } from './Menu'
-import { LATEST_VERSION, PatchNotesPanel } from './PatchNotesPanel'
-import { RestoreDefaults, SettingsPanel } from './SettingsPanel'
+import { startAnalytics } from '../analytics.ts'
+import { MENU_BACKDROP } from '../runtime/loading.ts'
+import { player, type Player } from '../net/session.ts'
+import { Drawer } from './Drawer.tsx'
+import { Menu } from './Menu.tsx'
+import { LATEST_VERSION, PatchNotesPanel } from './PatchNotesPanel.tsx'
+import { RestoreDefaults, SettingsPanel } from './SettingsPanel.tsx'
 
 const REPO = 'https://github.com/aasumitro/bbmvc' // the source, the corner's second button
 
@@ -73,32 +73,26 @@ export function MainMenu({ onPlay, onGarage }: MainMenuProps) {
 
   return (
     <div
-      className="fixed inset-0 bg-cover bg-center text-[#f2ece0] before:absolute before:inset-0 before:bg-gradient-to-r before:from-black/75 before:via-black/35 before:to-black/10 before:content-['']"
+      className="fixed inset-0 bg-cover bg-center text-[#f2ece0] before:absolute before:inset-0 before:bg-linear-to-r before:from-black/75 before:via-black/35 before:to-black/10 before:content-['']"
       style={{ backgroundImage: `url('${MENU_BACKDROP}')` }}
     >
       <div className="relative flex h-full max-w-xl flex-col justify-center gap-6 pl-[6vw]">
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="text-red-500">
-          <path
-            d="M12 2 L14 9 L21 9 L15.5 13.5 L17.5 21 L12 16.5 L6.5 21 L8.5 13.5 L3 9 L10 9 Z"
-            stroke="currentColor"
-            strokeWidth="1"
-          />
+          <path d="M12 2 L14 9 L21 9 L15.5 13.5 L17.5 21 L12 16.5 L6.5 21 L8.5 13.5 L3 9 L10 9 Z" stroke="currentColor" strokeWidth="1" />
         </svg>
 
         <div>
-          <h1 className="m-0 font-display text-6xl font-semibold tracking-[0.05em] drop-shadow-[0_0_32px_rgba(220,38,38,0.5)] sm:text-7xl">
-            Scrapyard
-          </h1>
+          <h1 className="m-0 font-display text-6xl font-semibold tracking-wider drop-shadow-[0_0_32px_rgba(220,38,38,0.5)] sm:text-7xl">Scrapyard</h1>
           <div className="mt-3 flex items-center gap-4">
             <p className="font-display text-lg text-red-400/90 italic">Car Battle</p>
-            <div className="h-px flex-1 bg-gradient-to-r from-red-500/80 to-transparent" />
+            <div className="h-px flex-1 bg-linear-to-r from-red-500/80 to-transparent" />
           </div>
         </div>
 
         <Menu items={items} selected={selected} onSelect={setSelected} onActivate={(i) => items[i].action?.()} />
       </div>
 
-      <div className="absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-[0.1em] text-neutral-400 uppercase">
+      <div className="absolute bottom-8 left-[6vw] flex items-center gap-4 font-sans text-xs tracking-widest text-neutral-400 uppercase">
         <span className="rounded border border-neutral-500/50 px-1.5 py-0.5">&uarr;&darr;</span>
         <span>Choose</span>
         <span className="rounded border border-neutral-500/50 px-1.5 py-0.5">Enter</span>
@@ -108,13 +102,20 @@ export function MainMenu({ onPlay, onGarage }: MainMenuProps) {
       {who && (
         <div className="absolute top-8 right-[4vw] text-right">
           {who === 'offline' ? (
-            <p className="font-sans text-xs font-bold tracking-[0.15em] text-neutral-500 uppercase" title="Can't reach the game server. Practice works without it.">
+            <p
+              className="font-sans text-xs font-bold tracking-[0.15em] text-neutral-500 uppercase"
+              title="Can't reach the game server. Practice works without it."
+            >
               Offline
             </p>
           ) : (
             <>
               <p className="font-sans text-[0.65rem] font-bold tracking-[0.25em] text-neutral-500 uppercase">Playing as</p>
-              <a href={who.guest ? '/register' : '/account'} title={who.guest ? 'Guests are deleted after 3 days: create an account to keep your name' : 'Your account'} className="mt-1 block font-display text-lg text-neutral-200 hover:text-white">
+              <a
+                href={who.guest ? '/register' : '/account'}
+                title={who.guest ? 'Guests are deleted after 3 days: create an account to keep your name' : 'Your account'}
+                className="mt-1 block font-display text-lg text-neutral-200 hover:text-white"
+              >
                 {who.name}
               </a>
               {who.guest && (
@@ -156,9 +157,7 @@ export function MainMenu({ onPlay, onGarage }: MainMenuProps) {
         </div>
         <div className="text-right font-display text-neutral-300/90 italic">
           <p className="text-sm">&ldquo;What you scrap, you keep. What you keep, keeps you alive.&rdquo;</p>
-          <p className="mt-1 font-sans text-[0.65rem] tracking-[0.25em] text-neutral-500 not-italic uppercase">
-            Yard Law, First Rule
-          </p>
+          <p className="mt-1 font-sans text-[0.65rem] tracking-[0.25em] text-neutral-500 uppercase not-italic">Yard Law, First Rule</p>
         </div>
       </div>
 

@@ -6,13 +6,13 @@ import type { Queue, QueueNote } from '../src/net/protocol.ts'
 // rest — same mode, same arena, same build, oldest first — into proposals: eight
 // people at first, fewer the longer the oldest has waited. Everyone in a
 // proposal accepts or declines within the ready check; enough accepts start
-// it (the lobby makes the room and seats them: server/lobby.ts, bots take the
+// it (seating makes the room and seats them: server/seating.ts, bots take the
 // other seats), and the people who accepted a proposal that didn't start go
 // back to the queue in the place they had. Pure: no sockets, rooms or
 // timers. The lobby gives it the clock and what it needs to know of the
 // rooms, passes on what players ask, and ticks it every step; the matcher
 // tells each player where they stand (protocol.ts Queue) whenever that
-// changes. Plain node: matchmaker.check.ts.
+// changes. Tests: matchmaker.test.ts.
 
 // Every number it runs on (the brief's names in capitals).
 export const MATCHMAKING = {
@@ -28,7 +28,7 @@ export const MATCHMAKING = {
 }
 export type MatchmakingConfig = typeof MATCHMAKING
 
-export interface Ticket {
+interface Ticket {
   id: string
   uid: string // the player: the server's reading of their session, never a field they sent
   mode: string
@@ -74,9 +74,7 @@ export interface MatchmakerHooks {
 }
 
 // Who may play together (pluggable: a rating band, a region, a party would go here).
-export const sameQueue = (a: Ticket, b: Ticket) => a.mode === b.mode && a.map === b.map && a.build === b.build
-
-export type Matchmaker = ReturnType<typeof createMatchmaker>
+const sameQueue = (a: Ticket, b: Ticket) => a.mode === b.mode && a.map === b.map && a.build === b.build
 
 export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConfig = MATCHMAKING, compatible: (a: Ticket, b: Ticket) => boolean = sameQueue) {
   const tickets = new Map<string, Ticket>() // by uid, one each, in the order they were made
@@ -92,7 +90,19 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
     const now = hooks.now()
     const p = t.proposal
     if (!p) return { t: 'mm', state: 'searching', mode: t.mode, map: t.map, waited: now - t.createdAt, ...said }
-    return { t: 'mm', state: p.accepted.has(uid) ? 'accepted' : 'found', mode: p.mode, id: p.id, map: p.map, players: p.players, size: p.uids.length, accepted: p.accepted.size, declined: p.declined.size, left: Math.max(0, p.expiresAt - now), of: config.readyCheckMs }
+    return {
+      t: 'mm',
+      state: p.accepted.has(uid) ? 'accepted' : 'found',
+      mode: p.mode,
+      id: p.id,
+      map: p.map,
+      players: p.players,
+      size: p.uids.length,
+      accepted: p.accepted.size,
+      declined: p.declined.size,
+      left: Math.max(0, p.expiresAt - now),
+      of: config.readyCheckMs,
+    }
   }
   const tell = (uid: string, note?: QueueNote) => hooks.tell(uid, stateOf(uid, note))
   // Everyone still in a proposal hears how it stands.
@@ -143,18 +153,39 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
     const accepted = members.filter((t) => p.accepted.has(t.uid))
     const enough = accepted.length >= (p.room ? 1 : config.minHumansToStart)
     p.state = enough ? 'starting' : 'cancelled'
-    if (enough && hooks.start(p, accepted.map((t) => t.uid))) {
+    if (
+      enough &&
+      hooks.start(
+        p,
+        accepted.map((t) => t.uid),
+      )
+    ) {
       p.state = 'started'
       for (const t of accepted) {
         t.status = 'matched'
         tickets.delete(t.uid)
       }
       if (p.room) log('backfill accepted', { proposal: p.id, room: p.room, map: p.map, uid: accepted[0].uid, humans: p.players })
-      else log('proposal started', { proposal: p.id, mode: p.mode, map: p.map, humans: accepted.length, bots: config.targetHumans - accepted.length, asked: p.uids.length })
+      else
+        log('proposal started', {
+          proposal: p.id,
+          mode: p.mode,
+          map: p.map,
+          humans: accepted.length,
+          bots: config.targetHumans - accepted.length,
+          asked: p.uids.length,
+        })
       return
     }
     p.state = 'cancelled'
-    log('proposal cancelled', { proposal: p.id, map: p.map, room: p.room, reason: enough ? 'no room' : 'too few accepted', accepted: accepted.length, asked: p.uids.length })
+    log('proposal cancelled', {
+      proposal: p.id,
+      map: p.map,
+      room: p.room,
+      reason: enough ? 'no room' : 'too few accepted',
+      accepted: accepted.length,
+      asked: p.uids.length,
+    })
     for (const t of accepted) {
       t.status = 'searching'
       t.proposal = undefined
@@ -163,13 +194,32 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
   }
 
   function propose(members: Ticket[], map: string, now: number, room?: Opening) {
-    const p: Proposal = { id: `p${++serial}`, mode: members[0].mode, map, uids: members.map((t) => t.uid), accepted: new Set(), declined: new Set(), state: 'ready_check', expiresAt: now + config.readyCheckMs, room: room?.id, players: room ? room.humans + 1 : members.length }
+    const p: Proposal = {
+      id: `p${++serial}`,
+      mode: members[0].mode,
+      map,
+      uids: members.map((t) => t.uid),
+      accepted: new Set(),
+      declined: new Set(),
+      state: 'ready_check',
+      expiresAt: now + config.readyCheckMs,
+      room: room?.id,
+      players: room ? room.humans + 1 : members.length,
+    }
     proposals.set(p.id, p)
     for (const t of members) {
       t.status = 'in_proposal'
       t.proposal = p
     }
-    log(room ? 'backfill offered' : 'proposal created', { proposal: p.id, mode: p.mode, map, room: p.room, uids: p.uids, humans: p.players, waited: now - members[0].createdAt })
+    log(room ? 'backfill offered' : 'proposal created', {
+      proposal: p.id,
+      mode: p.mode,
+      map,
+      room: p.room,
+      uids: p.uids,
+      humans: p.players,
+      waited: now - members[0].createdAt,
+    })
     update(p)
   }
 
@@ -205,7 +255,8 @@ export function createMatchmaker(hooks: MatchmakerHooks, config: MatchmakingConf
     while (pool.length && rooms > 0) {
       const oldest = pool[0]
       const waited = now - oldest.createdAt
-      const least = waited >= config.startSmallAfterMs ? config.minHumansToStart : waited >= config.fullOnlyWindowMs ? config.minHumansToStart + 2 : config.targetHumans
+      const least =
+        waited >= config.startSmallAfterMs ? config.minHumansToStart : waited >= config.fullOnlyWindowMs ? config.minHumansToStart + 2 : config.targetHumans
       const members = pool.filter((t) => compatible(oldest, t)).slice(0, config.targetHumans)
       if (members.length < least) {
         pool.shift() // nothing for it yet; the next oldest may still group with others

@@ -28,7 +28,16 @@ export function Avatar({ uid, className = 'h-9 w-9' }: { uid: string; className?
 
 export function Robot({ className = 'h-8 w-8' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 32 32" aria-hidden="true" className={`shrink-0 ${className}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 32 32"
+      aria-hidden="true"
+      className={`shrink-0 ${className}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M16 4v4M12 4h8" />
       <rect x="7" y="8" width="18" height="12" rx="3" />
       <circle cx="12.5" cy="14" r="1.2" fill="currentColor" />

@@ -8,7 +8,7 @@
 //   tdmMetrics.status                           // progress; a few seconds a match
 //   tdmMetrics.analyze('even')                  // summary of the finished runs
 //
-// autopilot(mode) — the player seat always drives on the bots' brain:
+// autopilot(mode, fit) — the player seat always drives on the bots' brain:
 //   'even'   the bots' gun, the brain's own aim: eight equal machines, so Blue
 //            and Red should split the wins
 //   'gun'    the garage Minigun, the brain's own aim (weapon data only)
@@ -16,12 +16,21 @@
 //            (aim assist only)
 //   'human'  the garage Minigun and the lock-on assist: a strong player
 //   null     no input at all: Blue plays 3 v 4 with a parked car
+// fit { vehicle, gun } (ids): the player's vehicle (changeVehicle where it
+// stands; it stays until another is given) and gun, in place of the bots'
+// ('even', 'assist': carried as a bot does) or the Minigun ('gun', 'human').
+//
+// Every match lines up as a new practice match on its seed would
+// (modes/roster.ts): the bots' vehicles and guns are drawn again, so a run's
+// matches are as many draws. analyze() gives every seat by vehicle and by
+// gun: kills, deaths, damage dealt and taken, seconds alive, a match each.
 //
 // It wraps the live rules' damage / kill / fired / respawned / tick and
 // samples state every step; it plays whole matches through match.frame() at
 // the fixed 60 Hz step, so the simulation is the game's own. The questions it
-// answers are in TDM_BALANCE_REPORT.md. Relies on internals (window.match,
-// match.mode.rules, match.mode.tactics, match.chase): best effort.
+// answers are in TDM_BALANCE_REPORT.md. Headless on any tree, a scratch
+// worktree's too: .claude/work/content/probe.mjs. Relies on internals
+// (window.match, match.mode.rules, match.mode.tactics, match.chase): best effort.
 window.tdmMetrics = (() => {
   const M = { runs: [], R: null, auto: null, status: null, t: performance.now() + 1e7 }
   const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z)
@@ -30,9 +39,13 @@ window.tdmMetrics = (() => {
   const FINAL = 9 * 60 // elapsed where the final minute starts
 
   M.setup = async () => {
-    M.ai = await import('/src/game/ai.ts')
-    M.combat = await import('/src/game/combat.ts')
-    M.cfg = (await import('/src/game/tdm/config.ts')).TDM
+    M.ai = await import('/src/sim/ai/brain.ts')
+    M.combat = await import('/src/sim/combat.ts')
+    M.weapons = await import('/src/content/weapons/weapons.ts')
+    M.sim = await import('/src/sim/simulation.ts')
+    M.roster = await import('/src/modes/roster.ts')
+    M.settings = await import('/src/modes/matchSettings.ts')
+    M.cfg = (await import('/src/modes/tdm/config.ts')).TDM
     const m = window.match
     const { combatants: C, chase: view, arena } = m
     const tdm = m.mode.kind === 'tdm' ? m.mode.rules : null
@@ -272,12 +285,24 @@ window.tdmMetrics = (() => {
     }
   }
 
-  M.autopilot = (mode) => {
+  M.autopilot = (mode, fit = {}) => {
     const m = window.match, p = m.player
-    M.auto = mode ? { mode } : null
+    M.auto = mode ? { mode, fit } : null
     p.brain = mode ? M.ai.createBrain(p.seed) : undefined // the simulation thinks for any machine with a brain
+    if (fit.vehicle) M.sim.changeVehicle(m.world, p, fit.vehicle)
+    const gun = fit.gun && M.weapons.WEAPONS[fit.gun]
     const garage = mode === 'gun' || mode === 'human'
-    p.weapon = M.combat.armWeapon(garage ? M.combat.WEAPONS.minigun : m.others[0].weapon.spec)
+    p.weapon = M.combat.armWeapon(garage ? gun || M.weapons.WEAPONS.minigun : gun ? M.ai.botGun(gun, m.others[0].brain.skill) : m.others[0].weapon.spec)
+  }
+
+  // The bots' vehicles and guns as a new practice match on this seed draws them.
+  function redraw() {
+    const m = window.match, p = m.player
+    const drawn = M.roster.recruits(m.mode.kind, m.arena, M.settings.classic(m.mode.kind), m.seed, m.others[0].brain.skill, { name: p.name, vehicle: p.vehicle, weapon: p.weapon.spec })
+    for (const c of m.others) {
+      M.sim.changeVehicle(m.world, c, drawn[c.id].vehicle)
+      c.weapon = M.combat.armWeapon(drawn[c.id].weapon)
+    }
   }
 
   function newRun(label) {
@@ -298,7 +323,10 @@ window.tdmMetrics = (() => {
   function finish() {
     const { combatants: C, mode: { rules: tdm } } = window.match
     drain(M.R)
-    Object.assign(M.R, { final: C.map((c) => ({ team: c.team, ...c.stats })), score: [...tdm.score], winner: tdm.winner, draw: tdm.draw, mvp: tdm.mvp, end: tdm.now })
+    Object.assign(M.R, {
+      final: C.map((c) => ({ team: c.team, ...c.stats })), fits: C.map((c) => ({ vehicle: c.vehicle, gun: c.weapon.spec.id })),
+      score: [...tdm.score], winner: tdm.winner, draw: tdm.draw, mvp: tdm.mvp, end: tdm.now,
+    })
     delete M.R.threats
     delete M.R.prev
     delete M.R.life
@@ -311,7 +339,8 @@ window.tdmMetrics = (() => {
     M.status = { done: 0, matches, running: true }
     const begin = () => {
       window.match.restart()
-      if (M.auto) M.autopilot(M.auto.mode)
+      redraw()
+      if (M.auto) M.autopilot(M.auto.mode, M.auto.fit)
       newRun(label)
     }
     begin()
@@ -321,7 +350,7 @@ window.tdmMetrics = (() => {
       if (m.phase === 'victory' || m.phase === 'defeat') {
         finish()
         M.status.done++
-        if (--left <= 0) return (M.status.running = false)
+        if (--left <= 0) return ch.port1.close(), (M.status.running = false)
         begin()
       }
       ch.port2.postMessage(0)
@@ -347,7 +376,7 @@ window.tdmMetrics = (() => {
     const aliveSec = sum(runs.flatMap((r) => r.alive))
     const ot = runs.filter((r) => r.overtimeAt != null)
     const n = runs[0].final.length
-    const schedule = (d) => (d.phase === 'overtime' ? cfg.respawn.overtime : cfg.respawn.phases.find((p) => d.t < p.before).delay)
+    const schedule = (d) => (d.phase === 'overtime' ? cfg.respawn.overtime : cfg.respawn.phases.find((p) => d.t < p.share * cfg.duration).delay) // shares of the clock (Classic's length)
     const seat = (f) => runs[0].final.map((_, i) => r1(avg(runs.map((r) => f(r.final[i])))))
 
     // who scored, who helped, who was MVP and why
@@ -413,6 +442,19 @@ window.tdmMetrics = (() => {
     const playerDeaths = deaths.filter((d) => d.v === 0)
     const revenges = deaths.filter((d) => d.credited && d.revengeAge != null)
 
+    // every seat of every match, grouped by its vehicle or its gun; a match each
+    const seats = runs.flatMap((r) => r.final.map((s, i) => ({ ...r.fits[i], s, alive: r.alive[i] })))
+    const by = (key) => {
+      const groups = {}
+      for (const x of seats) (groups[x[key]] ??= []).push(x)
+      const mean = (xs, f) => avg(xs.map(f))
+      return Object.fromEntries(Object.entries(groups).map(([k, xs]) => [k, {
+        seats: xs.length, kills: r1(mean(xs, (x) => x.s.kills)), deaths: r1(mean(xs, (x) => x.s.deaths)),
+        kd: Math.round((sum(xs.map((x) => x.s.kills)) / Math.max(1, sum(xs.map((x) => x.s.deaths)))) * 100) / 100,
+        dealt: Math.round(mean(xs, (x) => x.s.damageDealt)), taken: Math.round(mean(xs, (x) => x.s.damageTaken)), alive: Math.round(mean(xs, (x) => x.alive)),
+      }]))
+    }
+
     return {
       matches: N,
       match: {
@@ -462,7 +504,9 @@ window.tdmMetrics = (() => {
         taggedShare: pct(sum(runs.map((r) => r.feedback.tagged)) / sum(runs.map((r) => r.feedback.kills))), revengeAgeMedian: r1(med(revenges.map((d) => d.revengeAge))), revengeWithin60s: pct(revenges.filter((d) => d.revengeAge <= 60).length / Math.max(1, revenges.length)),
         revengeScoreShare: pct((revenges.length * cfg.score.revenge) / sum(runs.flatMap((r) => r.final.map((s) => s.combatScore)))),
       },
-      player: { kills: r1(avg(runs.map((r) => r.final[0].kills))), deaths: r1(avg(runs.map((r) => r.final[0].deaths))), assists: r1(avg(runs.map((r) => r.final[0].assists))), score: Math.round(avg(runs.map((r) => r.final[0].combatScore))), blueWinRate: pct(runs.filter((r) => r.winner === 0).length / N) },
+      player: { fit: [...new Set(runs.map((r) => `${r.fits[0].vehicle}/${r.fits[0].gun}`))].join(' '), kills: r1(avg(runs.map((r) => r.final[0].kills))), deaths: r1(avg(runs.map((r) => r.final[0].deaths))), assists: r1(avg(runs.map((r) => r.final[0].assists))), score: Math.round(avg(runs.map((r) => r.final[0].combatScore))), blueWinRate: pct(runs.filter((r) => r.winner === 0).length / N) },
+      byVehicle: by('vehicle'),
+      byGun: by('gun'),
     }
   }
 

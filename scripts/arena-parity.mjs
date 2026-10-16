@@ -28,9 +28,9 @@ const from = (path) => JSON.stringify(join(game, path))
 writeFileSync(join(dir, 'index.html'), '<!doctype html><title>arena parity</title><script type="module" src="./main.js"></script>\n')
 writeFileSync(
   join(dir, 'main.js'),
-  `import { MAPS } from ${from('src/game/maps.ts')}
-import { initPhysics } from ${from('src/game/physics.ts')}
-import { arenaDigest } from ${from('src/game/arena/digest.ts')}
+  `import { MAPS } from ${from('src/content/arenas/maps.ts')}
+import { initPhysics } from ${from('src/sim/physics.ts')}
+import { arenaDigest } from ${from('src/content/arenas/digest.ts')}
 try {
   await initPhysics()
   const out = {}

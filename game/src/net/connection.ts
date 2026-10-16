@@ -1,5 +1,5 @@
-import type { Loadout } from '../game/loadout'
-import { BUILD, PROTOCOL, readServer, type ErrorCode, type ServerMessage, type Welcome } from './protocol'
+import type { Loadout } from '../sim/loadout.ts'
+import { BUILD, PROTOCOL, readServer, type ErrorCode, type ServerMessage, type Welcome } from './protocol.ts'
 
 // The browser's end of the match socket: open it, say hello with the
 // player's session, wait for a seat (or the reason there isn't one), then
@@ -7,7 +7,7 @@ import { BUILD, PROTOCOL, readServer, type ErrorCode, type ServerMessage, type W
 // for the round trip, and say goodbye on the way out. The server's address:
 // VITE_GAME_SERVER when set; else, in development, port 7360 on the page's
 // own host; else /match on the page's own origin (Caddy passes it on). Runs
-// in Node too (the checks connect through it, with an address of their own).
+// in Node too (the tests connect through it, with an address of their own).
 
 const TIMEOUT = 5000 // ms to open, and again to be seated
 const PING = 2000
@@ -53,10 +53,10 @@ export function openSocket(url: string, origin?: string) {
   })
 }
 
-export interface Hello {
+interface Hello {
   token: string
   guest: boolean
-  mode?: string // with a map: a seat at once (the checks' way in); neither: a matchmaking session (matchmaking.ts)
+  mode?: string // with a map: a seat at once (the tests' way in); neither: a matchmaking session (matchmaking.ts)
   map?: string
   loadout: Loadout
 }
@@ -69,7 +69,7 @@ export type Link = ReturnType<typeof link>
 // Says hello asking for a seat at once, in a room of that mode on that arena,
 // and waits for it. Rejects with what the player should read: a refusal
 // (full, an old page, a bad session) or a server that went quiet. The
-// checks' way in; the game's is matchmaking (matchmaking.ts).
+// tests' way in; the game's is matchmaking (matchmaking.ts).
 export function join(socket: WebSocket, hello: Hello & { mode: string; map: string }) {
   return new Promise<Link>((resolve, reject) => {
     const timer = setTimeout(() => refuse(REASONS.unreachable), TIMEOUT)

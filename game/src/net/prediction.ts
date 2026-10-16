@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat'
-import { PHYSICS_STEP } from '../game/physics.ts'
-import { driveCar, rightIfUpended, type Car, type DriveInput } from '../game/vehicle/drive.ts'
+import { PHYSICS_STEP } from '../sim/physics.ts'
+import { driveCar, rightIfUpended, type Car, type DriveInput } from '../sim/drive.ts'
 import type { CarState, MeState } from './protocol.ts'
 
 // The player's own car, driven the moment the keys go down instead of a
@@ -10,9 +10,9 @@ import type { CarState, MeState } from './protocol.ts'
 // after a given input — the two are compared; within tolerance the
 // prediction stands, beyond it the server's state is taken and the inputs
 // since are driven again on top of it. The server decides; this only
-// guesses ahead of it. (Imports carry .ts: it needs no DOM and no bundler.)
+// guesses ahead of it. It needs no DOM.
 
-export const TOLERANCE = { position: 0.25, angle: (3 * Math.PI) / 180, speed: 1 } // metres, radians, m/s
+const TOLERANCE = { position: 0.25, angle: (3 * Math.PI) / 180, speed: 1 } // metres, radians, m/s
 const WRECKED: DriveInput = { throttle: 0, steer: 0, handbrake: true } // held on the grid, or the match over: as the server holds it
 const HISTORY = 256 // local steps kept (over 4 s)
 
@@ -32,9 +32,14 @@ interface Step {
   pose: Pose
 }
 
-const blankPose = (): Pose => ({ p: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 }, v: { x: 0, y: 0, z: 0 }, w: { x: 0, y: 0, z: 0 }, steer: 0, upended: 0 })
-
-export type Prediction = ReturnType<typeof createPrediction>
+const blankPose = (): Pose => ({
+  p: { x: 0, y: 0, z: 0 },
+  q: { x: 0, y: 0, z: 0, w: 1 },
+  v: { x: 0, y: 0, z: 0 },
+  w: { x: 0, y: 0, z: 0 },
+  steer: 0,
+  upended: 0,
+})
 
 export function createPrediction(world: RAPIER.World, car: Car) {
   const ring: Step[] = Array.from({ length: HISTORY }, () => ({ seq: -1, input: { ...WRECKED }, boost: 1, pose: blankPose() }))

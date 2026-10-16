@@ -8,26 +8,45 @@
 //   ffaMetrics.status                           // progress; ~7 s per match
 //   ffaMetrics.analyze('even')                  // summary of the finished runs
 //
-// autopilot(mode, style): 'even' = the bots' brain and gun, no aim assist
+// autopilot(mode, style, fit): 'even' = the bots' brain and gun, no aim assist
 // (eight equal machines); 'human' = the bots' brain with the garage Minigun
 // and the camera's lock-on assist; null = no input. style 'defensive' (hunts
-// nobody, only hits back) or 'aggressive' (hunts twice as far).
+// nobody, only hits back) or 'aggressive' (hunts twice as far). fit
+// { vehicle, gun } (ids): the player's vehicle (changeVehicle where it
+// stands; it stays until another is given) and gun ('even' carries it as a
+// bot does); no gun given: the first rival's ('even') or the Minigun.
+//
+// Every match lines up as a new practice match on its seed would
+// (modes/roster.ts): the bots' vehicles and guns are drawn again, so a run's
+// matches are as many draws. analyze() gives every seat by vehicle and by
+// gun: kills, deaths, damage dealt and taken, seconds alive, a match each.
 //
 // It wraps the live rules' damage / kill / respawned / tick and samples state
 // every step; it plays whole matches through match.frame() at the fixed 60 Hz
 // step, so the simulation is the game's own. Numbers in FFA_BALANCE_REPORT.md.
+// Pickups are the rules' supply (rules.supply: items, effects; SUPPLY).
+// Headless on any tree, a scratch worktree's too: .claude/work/content/probe.mjs.
 // Relies on internals (window.match, match.mode.rules, match.chase): best effort.
 window.ffaMetrics = (() => {
   const M = { runs: [], R: null, auto: null, status: null, t: performance.now() + 1e7 }
   const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z)
   const inside = (zone, p) => !!zone && dist(zone, p) <= zone.radius
   const fighting = (ffa) => ffa.phase === 'active' || ffa.phase === 'finalMinute' || ffa.phase === 'overtime'
-  const effectsOn = (c, now) => ({ damage: c.effects.damage > now, armor: c.effects.armor > now, speed: c.effects.speed > now, repair: c.effects.repair > now })
+  // machine i's pickups running (the supply's effects: expiry on the match clock)
+  const effectsOn = (i, now) => {
+    const e = window.match.mode.rules.supply.effects[i]
+    return { damage: e.damage > now, armor: e.armor > now, speed: e.speed > now, repair: e.repair > now }
+  }
 
   M.setup = async () => {
-    M.ai = await import('/src/game/ai.ts')
-    M.combat = await import('/src/game/combat.ts')
-    M.cfg = (await import('/src/game/ffa/config.ts')).FFA
+    M.ai = await import('/src/sim/ai/brain.ts')
+    M.combat = await import('/src/sim/combat.ts')
+    M.weapons = await import('/src/content/weapons/weapons.ts')
+    M.sim = await import('/src/sim/simulation.ts')
+    M.roster = await import('/src/modes/roster.ts')
+    M.settings = await import('/src/modes/matchSettings.ts')
+    M.cfg = (await import('/src/modes/ffa/config.ts')).FFA
+    M.items = (await import('/src/modes/items/config.ts')).SUPPLY
     const m = window.match
     const { combatants: C, chase: view } = m
     const ffa = m.mode.kind === 'ffa' ? m.mode.rules : null
@@ -58,8 +77,8 @@ window.ffaMetrics = (() => {
     ffa.damage = (a, v, amount) => {
       const R = M.R, now = ffa.now, hit = ffa.contenders[v], hp = C[v].health
       const shield = hit.life === 'protected' && now < hit.protectedUntil ? M.cfg.protection.reduction : 0
-      const armor = hit.effects.armor > now ? M.cfg.items.armor.reduction : 0
-      const boost = ffa.contenders[a].effects.damage > now ? M.cfg.items.damage.factor : 1
+      const armor = ffa.supply.effects[v].armor > now ? M.items.armor.reduction : 0
+      const boost = ffa.supply.effects[a].damage > now ? M.items.damage.factor : 1
       const byProtected = ffa.contenders[a].life === 'protected'
       const dealt = orig.damage(a, v, amount)
       if (!R || dealt <= 0) return dealt
@@ -80,7 +99,7 @@ window.ffaMetrics = (() => {
       const R = M.R, now = ffa.now, cv = ffa.contenders[v], ck = k >= 0 ? ffa.contenders[k] : null
       const ctx = R && {
         now, t: ffa.elapsed(), phase: ffa.phase, v, k, life: now - cv.spawnedAt, vProt: cv.life === 'protected',
-        vEff: effectsOn(cv, now), kEff: ck ? effectsOn(ck, now) : null, vZone: inside(ffa.zone, C[v].position),
+        vEff: effectsOn(v, now), kEff: ck ? effectsOn(k, now) : null, vZone: inside(ffa.zone, C[v].position),
         kTrail: k >= 0 && ffa.trailing(k), leader: ffa.soleLeader(),
       }
       const ok = orig.kill(v, k)
@@ -114,7 +133,7 @@ window.ffaMetrics = (() => {
       const R = M.R
       if (!R) return
       if (fighting(ffa)) sample(R, dt, (sampleIn -= dt) <= 0 && (sampleIn = 0.25) > 0)
-      for (const it of ffa.items) {
+      for (const it of ffa.supply.items) {
         if (R.seen.has(it.id)) continue
         R.seen.add(it.id)
         R.spawned.push({ type: it.type, rarity: it.rarity, hot: it.hot, trailingNear: C.some((c) => c.alive && ffa.trailing(c.id) && dist(c.position, it) <= M.cfg.comeback.radius) })
@@ -130,7 +149,7 @@ window.ffaMetrics = (() => {
     const { combatants: C, others: bots, mode: { rules: ffa } } = window.match
     const now = ffa.now
     for (const c of C) {
-      const i = c.id, con = ffa.contenders[i]
+      const i = c.id
       if (!c.alive) {
         R.dead[i] += dt
         continue
@@ -140,7 +159,7 @@ window.ffaMetrics = (() => {
       if (zoned) R.zoneTime[i] += dt
       if (zoned && c.brain && !c.brain.target) R.zoneIdle += dt
       if (ffa.trailing(i)) R.trailTime[i] += dt
-      for (const e of ['repair', 'speed', 'armor', 'damage']) if (con.effects[e] > now) R.eff[e] += dt
+      for (const e of ['repair', 'speed', 'armor', 'damage']) if (ffa.supply.effects[i][e] > now) R.eff[e] += dt
     }
     if (!slow) return
     const leader = ffa.soleLeader()
@@ -158,7 +177,7 @@ window.ffaMetrics = (() => {
       const e = ffa.errand(b.id)
       if (!e || (b.brain.target && !e.urgent)) continue
       if (b.brain.target) R.urgentWithTarget += 0.25
-      const item = ffa.items.find((it) => Math.abs(it.x - e.x) < 0.01 && Math.abs(it.z - e.z) < 0.01)
+      const item = ffa.supply.items.find((it) => Math.abs(it.x - e.x) < 0.01 && Math.abs(it.z - e.z) < 0.01)
       if (item) chasing.set(item, (chasing.get(item) ?? 0) + 1)
     }
     for (const [item, count] of chasing) {
@@ -187,7 +206,7 @@ window.ffaMetrics = (() => {
         const kind = e.item.type === 'damage' || e.item.type === 'armor' ? e.item.type : null
         if (!kind) continue
         const list = kind === 'damage' ? R.boosts : R.armors
-        const until = ffa.contenders[e.who].effects[kind]
+        const until = ffa.supply.effects[e.who][kind]
         const open = list.find((w) => w.who === e.who && w.until > now)
         if (open) open.until = until // a refresh extends the window
         else list.push({ who: e.who, until, kills: 0, dealt: 0, died: false })
@@ -196,11 +215,24 @@ window.ffaMetrics = (() => {
     }
   }
 
-  M.autopilot = (mode, style = 'normal') => {
+  M.autopilot = (mode, style = 'normal', fit = {}) => {
     const m = window.match, p = m.player
-    M.auto = mode ? { mode, style } : null
+    M.auto = mode ? { mode, style, fit } : null
     p.brain = mode ? M.ai.createBrain(p.seed) : undefined // the simulation thinks for any machine with a brain
-    p.weapon = M.combat.armWeapon(mode === 'even' ? m.others[0].weapon.spec : M.combat.WEAPONS.minigun)
+    if (fit.vehicle) M.sim.changeVehicle(m.world, p, fit.vehicle)
+    const gun = fit.gun && M.weapons.WEAPONS[fit.gun]
+    const even = mode === 'even'
+    p.weapon = M.combat.armWeapon(even ? (gun ? M.ai.botGun(gun, m.others[0].brain.skill) : m.others[0].weapon.spec) : gun || M.weapons.WEAPONS.minigun)
+  }
+
+  // The bots' vehicles and guns as a new practice match on this seed draws them.
+  function redraw() {
+    const m = window.match, p = m.player
+    const drawn = M.roster.recruits(m.mode.kind, m.arena, M.settings.classic(m.mode.kind), m.seed, m.others[0].brain.skill, { name: p.name, vehicle: p.vehicle, weapon: p.weapon.spec })
+    for (const c of m.others) {
+      M.sim.changeVehicle(m.world, c, drawn[c.id].vehicle)
+      c.weapon = M.combat.armWeapon(drawn[c.id].weapon)
+    }
   }
 
   function newRun(label) {
@@ -222,7 +254,10 @@ window.ffaMetrics = (() => {
     const { combatants: C, mode: { rules: ffa } } = window.match
     const R = M.R
     drain(R)
-    Object.assign(R, { final: C.map((c) => ({ ...c.stats })), order: [...ffa.standings()], winner: ffa.winner, draw: ffa.draw, end: ffa.now })
+    Object.assign(R, {
+      final: C.map((c) => ({ ...c.stats })), fits: C.map((c) => ({ vehicle: c.vehicle, gun: c.weapon.spec.id })),
+      order: [...ffa.standings()], winner: ffa.winner, draw: ffa.draw, end: ffa.now,
+    })
     delete R.seen
   }
 
@@ -233,7 +268,8 @@ window.ffaMetrics = (() => {
     M.status = { done: 0, matches, running: true }
     const begin = () => {
       window.match.restart()
-      if (M.auto) M.autopilot(M.auto.mode, M.auto.style)
+      redraw()
+      if (M.auto) M.autopilot(M.auto.mode, M.auto.style, M.auto.fit)
       newRun(label)
     }
     begin()
@@ -246,7 +282,7 @@ window.ffaMetrics = (() => {
       if (m.phase === 'victory' || m.phase === 'defeat') {
         finish()
         M.status.done++
-        if (--left <= 0) return (M.status.running = false)
+        if (--left <= 0) return ch.port1.close(), (M.status.running = false)
         begin()
       }
       ch.port2.postMessage(0)
@@ -277,7 +313,7 @@ window.ffaMetrics = (() => {
         return [name, { perMin: r1(ds.length / ((N * (b - a)) / 60)), avgLife: r1(avg(ds.map((d) => d.life))), wait: r1(avg(ds.map((d) => d.wait ?? 0))), downtime: pct(sum(ds.map((d) => d.wait ?? 0)) / (N * (b - a) * 8)) }]
       }),
     )
-    const table = (d) => (d.phase === 'overtime' ? M.cfg.respawn.overtime : M.cfg.respawn.phases.find((p) => d.t < p.before).delay)
+    const table = (d) => (d.phase === 'overtime' ? M.cfg.respawn.overtime : M.cfg.respawn.phases.find((p) => d.t < p.share * M.cfg.duration).delay) // shares of the clock (Classic's length)
     const spawns = runs.flatMap((r) => r.spawns)
     const spawned = runs.flatMap((r) => r.spawned), collected = runs.flatMap((r) => r.collected), expired = runs.flatMap((r) => r.expired)
     const boosts = runs.flatMap((r) => r.boosts), armors = runs.flatMap((r) => r.armors)
@@ -289,6 +325,18 @@ window.ffaMetrics = (() => {
     const tg = runs.reduce((a, r) => ({ samples: a.samples + r.targeting.samples, leader: a.leader + r.targeting.leader, expected: a.expected + r.targeting.expected }), { samples: 0, leader: 0, expected: 0 })
     const chase = runs.reduce((a, r) => a.map((x, i) => x + r.chase[i]), new Array(9).fill(0))
     const player = (f) => r1(avg(runs.map(f)))
+    // every seat of every match, grouped by its vehicle or its gun; a match each
+    const seats = runs.flatMap((r) => r.final.map((s, i) => ({ ...r.fits[i], s, alive: r.alive[i] })))
+    const by = (key) => {
+      const groups = {}
+      for (const x of seats) (groups[x[key]] ??= []).push(x)
+      const mean = (xs, f) => avg(xs.map(f))
+      return Object.fromEntries(Object.entries(groups).map(([k, xs]) => [k, {
+        seats: xs.length, kills: r1(mean(xs, (x) => x.s.kills)), deaths: r1(mean(xs, (x) => x.s.deaths)),
+        kd: Math.round((sum(xs.map((x) => x.s.kills)) / Math.max(1, sum(xs.map((x) => x.s.deaths)))) * 100) / 100,
+        dealt: Math.round(mean(xs, (x) => x.s.damageDealt)), taken: Math.round(mean(xs, (x) => x.s.damageTaken)), alive: Math.round(mean(xs, (x) => x.alive)),
+      }]))
+    }
     let alternation = 0
     for (const r of runs) {
       const seq = [...r.deaths.map((d) => [d.now, d.v, 'd']), ...r.spawns.map((s) => [s.now, s.i, 's'])].sort((a, b) => a[0] - b[0])
@@ -312,7 +360,9 @@ window.ffaMetrics = (() => {
       comeback: { trailingPerMatch: r1(avg(runs.map((r) => r.trailTime.filter((x) => x > 0).length))), timeShare: pct(trailTime / aliveSec), killRate: r1(kills.filter((d) => d.kTrail).length / trailTime / killRate), pickupShare: pct(collected.filter((c) => c.trailing).length / collected.length), spawnsNear: pct(spawned.filter((s) => s.trailingNear).length / spawned.length) },
       bots: { leaderTargetRatio: r1(tg.leader / tg.expected), threePlusOnOneItem: pct(sum(chase.slice(3)) / sum(chase)), chaseHistogram: chase.slice(1), urgentWithTargetPerMatch: r1(sum(runs.map((r) => r.urgentWithTarget)) / N) },
       feedback: { milestones: per(runs.flatMap((r) => Object.entries(r.events.milestones).flatMap(([k, v]) => new Array(v).fill({ k }))), 'k'), revengeShare: pct(sum(runs.map((r) => r.events.revenge)) / kills.length), nemesisPerMatch: r1(sum(runs.map((r) => r.events.nemesis)) / N) },
-      player: { kills: player((r) => r.final[0].kills), deaths: player((r) => r.final[0].deaths), items: player((r) => r.final[0].itemsCollected), place: player((r) => r.order.indexOf(0) + 1), wins: runs.filter((r) => r.winner === 0).length },
+      player: { fit: [...new Set(runs.map((r) => `${r.fits[0].vehicle}/${r.fits[0].gun}`))].join(' '), kills: player((r) => r.final[0].kills), deaths: player((r) => r.final[0].deaths), items: player((r) => r.final[0].itemsCollected), place: player((r) => r.order.indexOf(0) + 1), wins: runs.filter((r) => r.winner === 0).length },
+      byVehicle: by('vehicle'),
+      byGun: by('gun'),
     }
   }
 

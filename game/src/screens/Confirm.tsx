@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { playSound } from '../game/audio'
-import { Menu } from './Menu'
+import { playSound } from '../view/audio.ts'
+import { Menu } from './Menu.tsx'
 
 interface ConfirmProps {
   title: string
@@ -36,14 +36,30 @@ export function Confirm({ title, body, confirm, onConfirm, onCancel }: ConfirmPr
   })
 
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" onClick={onCancel} className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 text-[#f2ece0]">
-      <div onClick={(e) => e.stopPropagation()} className="w-[min(90vw,460px)] border border-white/10 bg-[#12161f] px-9 py-8 shadow-[0_24px_70px_rgba(0,0,0,0.65)]">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-title"
+      onClick={onCancel}
+      className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 text-[#f2ece0]"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[min(90vw,460px)] border border-white/10 bg-[#12161f] px-9 py-8 shadow-[0_24px_70px_rgba(0,0,0,0.65)]"
+      >
         <h2 id="confirm-title" className="m-0 font-display text-4xl font-semibold">
           {title}
         </h2>
         <p className="mt-3 font-display text-base text-neutral-300 italic">{body}</p>
-        <Menu row items={[{ label: 'Stay' }, { label: confirm, danger: true }]} selected={selected} onSelect={setSelected} onActivate={choose} className="mt-8" />
-        <div className="mt-8 flex items-center gap-4 text-xs tracking-[0.1em] text-neutral-400 uppercase">
+        <Menu
+          row
+          items={[{ label: 'Stay' }, { label: confirm, danger: true }]}
+          selected={selected}
+          onSelect={setSelected}
+          onActivate={choose}
+          className="mt-8"
+        />
+        <div className="mt-8 flex items-center gap-4 text-xs tracking-widest text-neutral-400 uppercase">
           <span className={keycap}>&larr;&rarr;</span>
           <span>Choose</span>
           <span className={keycap}>Enter</span>

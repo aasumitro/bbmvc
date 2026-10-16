@@ -1,7 +1,7 @@
 // Smoke test for online matches: a Nakama guest takes a seat on the game
 // server — at <site>/match, as the game at /play does — on every arena, and
 // the arena the server plays must be the one game/server/digests.json expects
-// (the file the server's own arena check and the browser parity script hold
+// (the file the server's own arena test and the browser parity script hold
 // to: a server that drifted fails the deploy, not every player). Then leaves.
 // Deletes the guest it made.
 //   local:  node scripts/match-smoke.mjs   (the game server straight on :7360; SITE_URL=http://localhost:8000 goes through the site's dev server)
