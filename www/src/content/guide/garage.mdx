@@ -1,30 +1,57 @@
 ---
 title: "The garage"
-description: "The Razor war rig and its two guns in numbers: Minigun and Rocket Pod damage, fire rate, magazine, reload, range and sustained damage per second."
+description: "The Razor, the Brute, the Scout, the Buggy and the Rammer, and the seven guns they carry, in numbers: speed, weight and hull; Minigun, Rocket Pod, Cannon, Shotgun, Laser, Homing Missiles and Mines damage, fire rate, magazine, reload, range and sustained damage per second."
 ---
 # The garage
 
-The garage is where you choose what goes on the roof. Open it from the main menu, change weapon with <kbd>←</kbd> <kbd>→</kbd>, and **Select** to take it to the arena. The choice carries over to your next match.
+The garage is where you choose your machine and the gun on it. Open it from the main menu. On **Vehicle**, <kbd>←</kbd> <kbd>→</kbd> change the machine; on **Loadout**, the gun. Each choice is kept the moment you make it, so there is nothing to confirm: **Back** (or <kbd>Esc</kbd>) returns to the main menu, and **Play** takes your machine into the arena, in practice and in Classic alike.
 
-## Razor
+## Machines
 
-A 4×4 war rig, balanced: *a well-rounded war machine built for the scrapyard*. It is the one machine for now.
+| | Razor | Brute | Scout | Buggy | Rammer |
+| --- | --- | --- | --- | --- | --- |
+| Class | 4×4 war rig, balanced | armoured hauler, heavy | light raider, fast | dune buggy, agile | battering ram, heavy |
+| Hull | 100 points | 135 points | 70 points | 85 points | 120 points |
+| Weight | 1,400 kg | 2,200 kg | 1,000 kg | 1,100 kg | 1,800 kg |
+| Top speed | 98 km/h | 85 km/h | 120 km/h | 110 km/h | 95 km/h |
+| 0–80 km/h | 4.2 s | 5.5 s | 3.0 s | 3.4 s | 4.3 s |
+| Power | 170 hp | 230 hp | 177 hp | 165 hp | 213 hp |
+| Turning circle | 12.1 m | 14.5 m | 10.3 m | 11.6 m | 13.3 m |
+| Ram | none | none | none | none | 2.5 a m/s it closes, 66 flat out |
 
-- **Hull**: 100 points
-- **Weight**: 1,400 kg
-- **Weapon mount**: a turret on the roof that turns to your aim
+Each carries its gun in a turret that turns to your aim. Bots drive all five.
+
+### Razor
+
+*A well-rounded war machine built for the scrapyard.* Quick off the line and tight in the turns, with the gun on the roof.
+
+### Brute
+
+*Slab armour, a dozer blade on the nose and a turret on its back.* The cab sits over the front axle and the gun on the fighting compartment behind it. Slow off the line and wide in the turns, but its hull takes 35 points more than the Razor's: a Rocket Pod needs four direct hits to wreck it.
+
+### Scout
+
+*A stripped coupe on a cage and not much else.* Low and long in the nose, the cabin in its cage with the gun on the roof and a wing on the tail. The quickest machine off the line and the tightest in the turns, but its hull takes 30 points less than the Razor's: three direct rockets or two Cannon rounds wreck it.
+
+### Buggy
+
+*A tube cage on long-travel arms and four big tyres.* A narrow tub with the seats in an open cage, the gun on the cage's roof and the engine bare at the back; the wheels stand out on their arms with the longest suspension in the garage, so it soaks up the rough ground and lands on its wheels. Quicker than the Razor and a little tighter in the turns, with 15 points less hull.
+
+### Rammer
+
+*A wedge of plate steel behind a plough.* Low and long, the cabin set back with the gun on its roof, a V-plough across the nose. The plough is a weapon: drive it into a car and that car takes 2.5 hull points for every m/s you were closing on it, 66 flat out into a car standing still, more head-on into one coming at you. A scrape along your flank deals nothing, and the same car is hit again only after a moment. A wreck it causes is your kill. Its hull takes 20 points more than the Razor's, and bots in one charge you.
 
 ## Weapons
 
-| | Minigun | Rocket Pod |
-| --- | --- | --- |
-| Damage | 4 a round | 38 on a direct hit, less towards the blast's edge |
-| Rate of fire | 12 rounds a second | 2 rockets a second |
-| Magazine | 60 rounds | 6 rockets |
-| Reload | 2.2 s | 3.5 s |
-| Range | 160 m | 220 m |
-| Projectile | instant hit | rocket at 95 m/s, 5 m blast |
-| Sustained damage | about 33 a second | about 35 a second, if every rocket lands |
+| | Minigun | Rocket Pod | Cannon | Shotgun | Laser | Homing Missiles | Mines |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Damage | 4 a round | 34 on a direct hit, less towards the blast's edge | 40 a round | 4 a pellet, 8 pellets a shot | 40 a second on target | 30 on a direct hit, less towards the blast's edge | 80 to the car that sets it off, less towards the blast's edge |
+| Rate of fire | 12 rounds a second | 2 rockets a second | 1 round a second | 1.2 shots a second | a beam, 10 pulses a second | 2 missiles a second | 1 mine a second |
+| Magazine | 60 rounds | 6 rockets | 4 rounds | 6 shots | 4 s of fire, then it overheats | 4 missiles | 3 mines |
+| Reload | 2.2 s | 3.5 s | 2.5 s | 2.5 s | 2 s to cool from hot | 4 s | 6 s |
+| Range | 160 m | 220 m | 260 m | 45 m | 120 m | 200 m | none: laid behind you |
+| Projectile | instant hit | rocket at 95 m/s, 5 m blast | instant hit | 8 pellets, instant hits, a wide spread | a beam, instant, dead straight | missile at 70 m/s, 3 m blast; locked on, it turns after its target | a mine, armed after 1 s, set off by a rival within 5 m; 7 m blast; 3 down at most, 30 s each |
+| Sustained damage | about 33 a second | about 31 a second, if every rocket lands | about 25 a second | about 26 a second, if every pellet lands | about 27 a second, overheating and cooling | 20 a second, if every missile lands | about 27 a second, if every mine goes off |
 
 Sustained damage counts whole magazines with their reloads.
 
@@ -34,4 +61,24 @@ Six spinning barrels. It hits the moment you fire, spreads a little, and keeps t
 
 ### Rocket Pod
 
-Six unguided rockets. Slow to reload and they need leading, but a blast hurts everything within 5 m and shoves cars sideways, so a near miss still does damage. Three direct hits wreck a Razor.
+Six unguided rockets. Slow to reload and they need leading, but a blast hurts everything within 5 m and shoves cars sideways, so a near miss still does damage. Three direct hits wreck a Scout, a Razor or a Buggy; a Brute or a Rammer takes four.
+
+### Cannon
+
+One heavy barrel. Each round hits the moment you fire and goes almost exactly where you point it, out to 260 m, but they come one a second, four to a clip. Two rounds wreck a Scout and three a Razor, a Buggy or a Rammer; a Brute takes four. Make each one count, from further off than anyone else can reach.
+
+### Shotgun
+
+A pump-action scattergun. Each shot throws eight pellets in a wide spread, each an instant hit, 32 a shot when they all land: up close they do, and four shots wreck a Razor or a Rammer, three a Scout or a Buggy, five a Brute. Past 20 m more of them go wide, and nothing reaches beyond 45 m. Six shots to a load, then a 2.5 s reload.
+
+### Laser
+
+A beam projector. Hold the trigger and the beam burns whatever it's on, 40 a second, dead straight out to 120 m: kept on a car it wrecks a Scout in under two seconds, a Razor in about two and a half, a Rammer in about three, a Brute in under three and a half. It heats as it fires: four seconds overheat it, and then it can't fire until it has cooled, two seconds from hot. Let go sooner and it cools as you wait. The HUD shows its heat where the other guns show their rounds.
+
+### Homing Missiles
+
+A four-cell missile box with a seeker on top. Keep a rival under the crosshair and in sight for 0.8 s and the lock takes: the weapon panel's bar fills as it does, and LOCKED shows once it's on. Every missile fired then turns after that machine, up to 143° a second; fired without a lock, a missile flies straight, as a rocket does. Each bursts with a 3 m blast, 30 on a direct hit: three wreck a Scout or a Buggy, four a Razor or a Rammer, five a Brute. Four to a load, then a 4 s reload.
+
+### Mines
+
+A rack of mines on the roof. Pull the trigger and a mine drops a metre behind your tail; a second later its light starts to blink: it's armed. The first rival whose car comes within 5 m of it sets it off, and that car takes the whole 80: from full, that wrecks a Scout and leaves a Buggy 5, a Razor 20, a Rammer 40 and a Brute 55. Anything else inside 7 m takes less towards the edge. Your own mines never hurt you, and a teammate never sets one off (with friendly fire on, a blast still hurts a teammate beside it). Three to a load, then a 6 s reload; three of yours lie at most, each for 30 s (lay another and your oldest goes).

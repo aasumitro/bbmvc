@@ -3,7 +3,11 @@ import { mergeByMaterial } from '../../render/geometry.ts'
 import { buildWheel } from '../parts.ts'
 import { TURRETS } from '../weapons/turrets.ts'
 import type { TurretKey } from '../weapons/weapons.ts'
+import { buildBrute } from './models/brute.ts'
+import { buildBuggy } from './models/buggy.ts'
+import { buildRammer } from './models/rammer.ts'
 import { buildRazor } from './models/razor.ts'
+import { buildScout } from './models/scout.ts'
 import type { Chassis, ModelParts, VehicleOptions } from './types.ts'
 import { VEHICLES, type VehicleId } from './vehicles.ts'
 
@@ -38,4 +42,8 @@ function assemble({ shell, turretAt, wheelWidth }: ModelParts, { wheelRadius, wh
 // Each vehicle's model, by id; a new vehicle adds its builder here.
 export const MODELS: Record<VehicleId, (options: VehicleOptions) => THREE.Group> = {
   razor: (options) => assemble(buildRazor(options), VEHICLES.razor.chassis, options.turret),
+  brute: (options) => assemble(buildBrute(options), VEHICLES.brute.chassis, options.turret),
+  scout: (options) => assemble(buildScout(options), VEHICLES.scout.chassis, options.turret),
+  buggy: (options) => assemble(buildBuggy(options), VEHICLES.buggy.chassis, options.turret),
+  rammer: (options) => assemble(buildRammer(options), VEHICLES.rammer.chassis, options.turret),
 }

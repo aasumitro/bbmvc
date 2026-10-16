@@ -3,7 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat'
 import * as THREE from 'three'
 import { botGun, createBrain } from '../src/sim/ai/brain.ts'
 import { DIFFICULTIES } from '../src/sim/difficulty.ts'
-import { armWeapon } from '../src/sim/combat.ts'
+import { armWeapon, locked } from '../src/sim/combat.ts'
 import { WEAPONS, type WeaponId } from '../src/content/weapons/weapons.ts'
 import type { Loadout } from '../src/sim/loadout.ts'
 import type { Arena } from '../src/content/arenas/arena.ts'
@@ -16,6 +16,7 @@ import { createWorld, PHYSICS_STEP } from '../src/sim/physics.ts'
 import { botName, recruits, type SeatPlan } from '../src/modes/roster.ts'
 import { changeVehicle, createSimulation, enlist, type Combatant } from '../src/sim/simulation.ts'
 import { arenaDigest } from '../src/content/arenas/digest.ts'
+import { encode } from '../src/net/events.ts'
 import {
   carRow,
   clampAim,
@@ -66,7 +67,7 @@ export const SKILL = DIFFICULTIES.normal // the bots' online
 const ABANDON = 10_000 // ms a custom room's match runs with no person seated before it ends without a result
 const IDLE = 60_000 // ms without input: the player is let go and a bot takes the seat (a custom room: back to the lobby's waiting room)
 const SHARE = 12 // steps between checks for a changed rules state
-const NEUTRAL = { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false }
+const NEUTRAL = { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false, lock: -1 }
 const STAND_DOWN = { ...NEUTRAL, handbrake: true }
 const EYE = 1.6 // metres over a machine where its page's lock-on looks from: the chase camera's pivot (camera.ts)
 const CAMERA = { back: 8.5, up: 1.7 } // and the camera itself, behind the pivot along the aim and raised
@@ -175,7 +176,8 @@ export function createRoom({
   const humans: Human[] = []
   const rewind = createRewind(world, combatants)
   const fairplay = createFairPlay(combatants.length)
-  const flags = { compensate: true } // lag compensation for people's hitscan (the netplay test turns it off to compare)
+  const lockedOn = combatants.map(() => false) // each seat's missile lock, as of the last step
+  const flags = { compensate: true } // lag compensation for people's hitscan and missile locks (the netplay test turns it off to compare)
   // The simulation's events go out to the pages; a person's hit on a hostile is also the fair-play watch's.
   const events = {
     ...recorder.sim,
@@ -198,6 +200,11 @@ export function createRoom({
       if (!flags.compensate) return false
       const human = humans.find((h) => h.seat === c.id)
       return !!human?.last && human.view < tick - 1 && rewind.cast(c, muzzle, human.view, shot, random)
+    },
+    seen(c, target, out) {
+      if (!flags.compensate) return false
+      const human = humans.find((h) => h.seat === c.id)
+      return !!human?.last && human.view < tick - 1 && rewind.where(target.id, human.view, out)
     },
   })
   plan?.forEach((seat, i) => seat || sim.vacate(combatants[i])) // nobody's: out of play until someone takes it
@@ -254,6 +261,11 @@ export function createRoom({
       sim.step(PHYSICS_STEP, live)
       time(performance.now() - started)
     }
+    for (const human of humans) {
+      const on = locked(combatants[human.seat].weapon)
+      if (on && !lockedOn[human.seat]) fairplay.locked(human.seat) // a person's missile took a lock: the watch notes it
+      lockedOn[human.seat] = on
+    }
     rewind.record(tick)
     if (mode.rules.events.length) {
       recorder.rules(mode.rules.events)
@@ -300,7 +312,14 @@ export function createRoom({
     if (kind === STANDING) Object.assign(c.control, STAND_DOWN)
     else if (kind === COASTING) Object.assign(c.control, NEUTRAL)
     else {
-      Object.assign(c.control, { throttle: input.throttle, steer: input.steer, handbrake: input.handbrake, fire: input.fire, recover: input.recover })
+      Object.assign(c.control, {
+        throttle: input.throttle,
+        steer: input.steer,
+        handbrake: input.handbrake,
+        fire: input.fire,
+        recover: input.recover,
+        lock: input.lock,
+      })
       clampAim(c.control.aim.copy(input.aim), c.position, c.weapon.spec.range)
       human.view = clampView(input.view, tick)
     }
@@ -524,6 +543,7 @@ export function createRoom({
       digest,
       lineUp: lineUp(),
       chat: { all: chat.all, team: teamChannel(c.team) },
+      mines: sim.mines.map((m) => encode({ code: 'ml', tick, id: m.id, owner: m.owner.id, at: m.position })),
       ...(lobby && { lobby }),
     })
     share(human)

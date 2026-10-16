@@ -13,13 +13,12 @@ import { WEAPONS } from '../src/content/weapons/weapons.ts'
 import { VEHICLES } from '../src/content/vehicles/vehicles.ts'
 import { inputMessage } from '../src/net/protocol.ts'
 import { initPhysics, PHYSICS_STEP } from '../src/sim/physics.ts'
-import type { Combatant } from '../src/sim/simulation.ts'
+import { changeVehicle, type Combatant } from '../src/sim/simulation.ts'
 import { placeCar } from '../src/sim/drive.ts'
 import { browser, play, until, type Browser } from './browser.ts'
 import { queueDepth } from './inputs.ts'
 import type { Room } from './room.ts'
 import { createGameServer } from './server.ts'
-import { addHauler, HAULER } from './testVehicle.ts'
 
 await initPhysics()
 
@@ -305,6 +304,7 @@ for (const lag of [75, 150]) {
   await until(() => room.mode.rules.phase === 'active', 6000, 'GO', [shooter])
   await play(500, [shooter])
   const target = room.combatants.find((c) => c.team !== room.combatants[shooter.player.id].team)!
+  changeVehicle(room.world, target, 'razor') // the crossing as it's written, for a Razor's height and top speed, whatever the seat drew
   const on = await crossing(shooter, room, target, true)
   target.health = target.maxHealth
   const off = await crossing(shooter, room, target, false)
@@ -351,20 +351,19 @@ for (const line of hits) console.log(line)
 
 // --- the second vehicle --------------------------------------------------------------------------------------
 
-// The hauler (testVehicle.ts: heavier, wider, longer, on bigger wheels), at
+// The Brute (heavier than the Razor, wider, longer, on bigger wheels), at
 // 100 ms each way: the page predicts the body the server seated it in, as
 // exactly as the Razor's.
 {
-  const removeHauler = addHauler()
   const lag = 100
   const server = createGameServer({ port: 0, key: KEY, origins: [ORIGIN], maxRooms: 2, lag, jitter: 10, arenaFor: () => open, log: () => {} })
   const port = await server.listen()
-  const h = await browser({ port, key: KEY, origin: ORIGIN, uid: 'hauler', arena: open, vehicle: HAULER })
+  const h = await browser({ port, key: KEY, origin: ORIGIN, uid: 'brute', arena: open, vehicle: 'brute' })
   const room = server.seating.rooms[0]
   stillBots(room)
   const seat = room.combatants[h.player.id]
   check(
-    h.player.vehicle === HAULER && seat.vehicle === HAULER && h.player.car.chassis === VEHICLES[HAULER].chassis,
+    h.player.vehicle === 'brute' && seat.vehicle === 'brute' && h.player.car.chassis === VEHICLES['brute'].chassis,
     'the second vehicle: the server seats the player in the one they chose, and the page builds and predicts it',
   )
   const corrections = watchCorrections(h)
@@ -380,7 +379,7 @@ for (const line of hits) console.log(line)
       return room.mode.rules.phase === 'active'
     },
     6000,
-    'GO in the hauler',
+    'GO in the Brute',
     [h],
   )
   const held = corrections.seen.length
@@ -401,18 +400,17 @@ for (const line of hits) console.log(line)
   }
   check(
     drive.travelled > 30 && drive.corrections <= drive.repeats + drive.drops,
-    `the hauler at ${lag} ms: 15 s of driving (${drive.travelled.toFixed(0)} m), every correction from an input the network delivered late or dropped (${drive.corrections} corrections; ${drive.repeats} late, ${drive.drops} dropped)`,
+    `the Brute at ${lag} ms: 15 s of driving (${drive.travelled.toFixed(0)} m), every correction from an input the network delivered late or dropped (${drive.corrections} corrections; ${drive.repeats} late, ${drive.drops} dropped)`,
   )
   check(
     drive.repeats + drive.drops > 0 || drive.maxError < 0.05,
-    `the hauler at ${lag} ms: with every input on time the prediction is exact to the wire’s rounding (${drive.maxError.toFixed(3)} m)`,
+    `the Brute at ${lag} ms: with every input on time the prediction is exact to the wire’s rounding (${drive.maxError.toFixed(3)} m)`,
   )
   results.push(
-    `the hauler, ${lag} ms each way ±10: ${held} corrections on the grid; 15 s drive ${drive.corrections} corrections, max error ${drive.maxError.toFixed(3)} m, ${drive.repeats} inputs the server had to repeat, ${drive.drops} dropped`,
+    `the Brute, ${lag} ms each way ±10: ${held} corrections on the grid; 15 s drive ${drive.corrections} corrections, max error ${drive.maxError.toFixed(3)} m, ${drive.repeats} inputs the server had to repeat, ${drive.drops} dropped`,
   )
   h.link.close()
   await server.close()
-  removeHauler()
 }
 
 // --- a rougher network: the server's queue of a page's inputs ---------------------------------------------------

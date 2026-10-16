@@ -6,7 +6,7 @@ describe('parseLoadout', () => {
   it.each([
     ['a valid loadout', { vehicle: 'razor', weapon: 'rocketPod' }, { vehicle: 'razor', weapon: 'rocketPod' }],
     ['an unknown vehicle', { vehicle: 'tank', weapon: 'rocketPod' }, { vehicle: 'razor', weapon: 'rocketPod' }],
-    ['an unknown weapon', { vehicle: 'razor', weapon: 'laser' }, { vehicle: 'razor', weapon: 'minigun' }],
+    ['an unknown weapon', { vehicle: 'razor', weapon: 'flamethrower' }, { vehicle: 'razor', weapon: 'minigun' }],
     ['null', null, DEFAULT_LOADOUT],
     ['a number', 7, DEFAULT_LOADOUT],
     ['a string', 'rocketPod', DEFAULT_LOADOUT],

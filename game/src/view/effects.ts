@@ -18,6 +18,7 @@ interface Kind {
 const SPARK: Kind = { life: [0.15, 0.4], size: [0.02, 0.045], grow: 0, color: [7, 3, 0.9], alpha: 1, drag: 1.2, lift: -14 }
 const FLASH: Kind = { life: [0.04, 0.06], size: [0.25, 0.45], grow: 2, color: [8, 4.5, 1.6], alpha: 1, drag: 0, lift: 0 }
 const TRACER: Kind = { life: [1, 1], size: [0.1, 0.1], grow: 0, color: [9, 4.5, 1.6], alpha: 1, drag: 0, lift: 0 }
+const GLINT: Kind = { life: [0.08, 0.11], size: [0.3, 0.45], grow: 0, color: [2.5, 7, 10], alpha: 1, drag: 0, lift: 0 }
 const FIRE: Kind = { life: [0.3, 0.65], size: [0.4, 0.9], grow: 1.2, color: [4.5, 1.6, 0.35], alpha: 0.6, drag: 2, lift: 5 }
 const FIREBALL: Kind = { life: [0.4, 0.9], size: [1, 2.2], grow: 2.4, color: [4, 1.4, 0.3], alpha: 0.5, drag: 3, lift: 3 }
 const SMOKE: Kind = { life: [2.5, 4.5], size: [1.2, 2.2], grow: 2.2, color: [0.035, 0.03, 0.028], alpha: 0.75, drag: 1, lift: 2.4 }
@@ -34,6 +35,8 @@ const STEAM: Kind = { life: [1.6, 2.8], size: [0.4, 0.8], grow: 1.5, color: [0.1
 const PLUME: Kind = { life: [10, 15], size: [4, 7], grow: 2.6, color: [0.022, 0.02, 0.019], alpha: 0.55, drag: 0.25, lift: 1.1 } // smoke column over a burning building
 
 const TRACER_SPEED = 320 // m/s; purely visual, rounds are hitscan
+const BEAMS = 16 // beams drawn at once: a pulse's lasts until the next one's
+const BEAM_LIFE = 0.13 // seconds; pulses come every 0.1 s, so a held beam is unbroken
 const BLAST_INTENSITY = 1600
 
 const VERTEX = /* glsl */ `
@@ -175,7 +178,22 @@ export function createEffects(scene: THREE.Scene) {
   glow.points.renderOrder = 2
   const blast = new THREE.PointLight('#ff9448', 0, 45, 2) // always in the scene: adding lights recompiles shaders
   let blastLevel = 0
-  scene.add(haze.points, glow.points, blast)
+  // Beams: thin glowing tubes, a few at a time, each from a muzzle to its impact.
+  const beamGeometry = new THREE.CylinderGeometry(0.045, 0.045, 1, 6, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2)
+  const beamMaterial = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(2, 6, 9),
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+  })
+  const beams = Array.from({ length: BEAMS }, () => {
+    const mesh = new THREE.Mesh(beamGeometry, beamMaterial)
+    mesh.visible = false
+    mesh.frustumCulled = false
+    return { mesh, life: 0 }
+  })
+  let nextBeam = 0
+  scene.add(haze.points, glow.points, blast, ...beams.map((b) => b.mesh))
 
   // Particles to emit this frame for `rate` per second on average.
   const quota = (rate: number, dt: number) => Math.floor(rate * dt) + (Math.random() < (rate * dt) % 1 ? 1 : 0)
@@ -208,6 +226,20 @@ export function createEffects(scene: THREE.Scene) {
           1 - k / 36,
         )
       }
+    },
+    // A beam's pulse, muzzle to impact, held until the next pulse takes over.
+    beam(from: THREE.Vector3, to: THREE.Vector3) {
+      const beam = beams[nextBeam]
+      nextBeam = (nextBeam + 1) % BEAMS
+      beam.mesh.position.copy(from)
+      beam.mesh.lookAt(to)
+      beam.mesh.scale.set(1, 1, Math.max(from.distanceTo(to), 0.01))
+      beam.mesh.visible = true
+      beam.life = BEAM_LIFE
+    },
+    // A beam's emitter lit as it pulses.
+    glint(at: THREE.Vector3) {
+      glow.spawn(GLINT, at.x, at.y, at.z, 0, 0, 0)
     },
     impact(at: THREE.Vector3, normal: THREE.Vector3, onVehicle: boolean) {
       for (let i = 0; i < (onVehicle ? 7 : 4); i++) {
@@ -295,6 +327,7 @@ export function createEffects(scene: THREE.Scene) {
       scale.value = viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2))
       glow.update(dt)
       haze.update(dt)
+      for (const beam of beams) beam.mesh.visible = (beam.life -= dt) > 0
       blast.intensity = BLAST_INTENSITY * blastLevel * blastLevel
       blastLevel = Math.max(0, blastLevel - dt * 2.2)
     },
@@ -302,11 +335,14 @@ export function createEffects(scene: THREE.Scene) {
       glow.clear()
       haze.clear()
       blastLevel = 0
+      for (const beam of beams) beam.mesh.visible = false
     },
     dispose() {
-      scene.remove(haze.points, glow.points, blast)
+      scene.remove(haze.points, glow.points, blast, ...beams.map((b) => b.mesh))
       glow.dispose()
       haze.dispose()
+      beamGeometry.dispose()
+      beamMaterial.dispose()
     },
   }
 }

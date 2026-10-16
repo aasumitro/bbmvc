@@ -23,12 +23,12 @@ Game server (`game/`, same package; plan, log and runbook: `.claude/work/net/`):
 ## Tests
 
 `npm test` runs Vitest (`vitest.config.ts`), in node, two projects. `unit`: `src/**/*.test.{ts,tsx}`, `server/**/*.test.ts` and `*.test.ts` at the game's root (`__BUILD__` `'dev'`). `integration`: `server/{arenas,server,client,netplay}.test.ts`, one file at a time in forks, after the unit tests, with this tree's build id. What a test prints shows even when it passes: the bots' kills a minute, Classic's and the custom pins, the arenas' digests. The build id skips tests. By folder:
-- `src/shared/`, `src/sim/`: the math and time helpers, the difficulties, the loadout parser; the bots' router (`ai/navigation.test.ts`) and the bots at every difficulty on a headless city yard (`bots.test.ts`: guns and leading, never stuck or parked, both guns pull their weight, cover and ambushes, harder wrecks more, its kills a minute); both modes through the real simulation, headless (`simulation.test.ts`: damage, wrecks, scoring, respawns, result, restart, a bots-only match replayed from its seed, the two yard pins, content numbers)
-- `src/content/`, `src/modes/`: the weapon table; the mode traits; the item catalogue; free for all's and team deathmatch's rules (`ffa/rules.test.ts`, `tdm/rules.test.ts`, with the team AI)
+- `src/shared/`, `src/sim/`: the math and time helpers, the difficulties, the loadout parser; the bots' router (`ai/navigation.test.ts`) and the bots at every difficulty on a headless city yard (`bots.test.ts`: guns and leading, never stuck or parked, both guns pull their weight, cover and ambushes, harder wrecks more, its kills a minute); both modes through the real simulation, headless (`simulation.test.ts`: damage, wrecks, scoring, respawns, result, restart, every weapon kind (pellets, a beam's heat, a missile's lock, mines laid, set off and cleared), a ram's blow, a bots-only match replayed from its seed, the two yard pins, content numbers)
+- `src/content/`, `src/modes/`: the weapon table; every vehicle model and turret built headless (`server/headless.ts`: the nodes the view drives, each wheel on its hub, the gun's trunnion at the spec's mount); the mode traits; the item catalogue; free for all's and team deathmatch's rules (`ffa/rules.test.ts`, `tdm/rules.test.ts`, with the team AI)
 - `src/runtime/`: the loading runner (progress, failure, retry, cancel)
 - `src/net/`: the wire (`protocol.test.ts`: round trips, the binary snapshot, every rule a client message must pass, fixtures pinned to the byte), the event codec, the lobby rules, the session socket's retries and mark, the chat line (`chatCommand.test.ts`)
 - `server/` (unit): Classic's matchmaking and custom lobbies on clocks moved by hand (`matchmaker.test.ts`, `lobbies.test.ts`: a lobby's row and view pinned as JSON), the fair-play signals, the input queue, the event codec against a real room's events
-- `server/` (integration): both arenas built headless (`arenas.test.ts`: digests from `server/digests.json`, the new-map checklist, every mode each hosts at its biggest); a real server over real sockets (`server.test.ts`: the door and the build id, rooms and seats, authority, each wire event as recorded, whole matches of bots pinned by hash — Classic's four, two custom — replays to the bit, matchmaking sessions, custom lobbies over sockets, two vehicles: a takeover in the other, a mixed custom room replayed); headless pages through `net/` (`client.test.ts`: the mirror, a matchmade seat, a custom lobby's store through drops and reloads); 50–150 ms each way (`netplay.test.ts`: prediction, drawn poses, lag-compensated hits, a second vehicle predicted, a rough link's input queue drained)
+- `server/` (integration): every arena built headless (`arenas.test.ts`: digests from `server/digests.json`, the new-map checklist, every mode each hosts at its biggest); a real server over real sockets (`server.test.ts`: the door and the build id, rooms and seats, authority, a missile's lock and a mine over the socket, each wire event as recorded, whole matches of bots pinned by hash — Classic's six, two custom — replays to the bit, matchmaking sessions, custom lobbies over sockets, two vehicles: a takeover in the other, a mixed custom room replayed); headless pages through `net/` (`client.test.ts`: the mirror, a matchmade seat, a custom lobby's store through drops and reloads); 50–150 ms each way (`netplay.test.ts`: prediction, drawn poses, lag-compensated hits, a second vehicle predicted, a rough link's input queue drained)
 - the root: `repo.test.ts` (no `*.check.ts` comes back; no mode literal outside the modes)
 
 Every relative import names its file (`./rng.ts`, `./Hud.tsx`).
@@ -63,27 +63,29 @@ shared/     rng.ts: mulberry32, the one seeded stream every other rests on; math
 render/     renderer.ts (one shared WebGLRenderer: screens call mountRenderer(), never new WebGLRenderer()), environment.ts (sky, sun, IBL, haze),
             postprocessing.ts (MSAA -> GTAO -> bloom -> ACES; QUALITY presets), geometry.ts (part/tube/truss helpers, boxUV, mergeByMaterial, scatter);
             materials/: library.ts the only material source, recipes.ts GLSL surfaces baked to PBR textures (bake.ts), facade.ts building styles + lit rooms
-content/    parts.ts (wheel, blade, lamp, spike, the turret's yoke); vehicles/: vehicles.ts (VEHICLES: handling, chassis, turret mount, armour, garage
-            copy), types.ts (Handling, Chassis, VehicleOptions, ModelParts), models.ts (MODELS by vehicle id; what every model shares: the merged
-            body, the turret on its ring, the wheels), models/ (a body builder per vehicle: razor.ts); arenas/: arena.ts (the Arena contract: spawns,
-            bases, zones, colliders, nav, emitters, minimap floor; clutterKit), maps.ts (MAPS: name, preview, modes hosted; mapsFor), digest.ts (the
-            arena's fingerprint, F3 ARENA, checked against the server's), scrapyard.ts, city.ts, kit/ (props, ground, buildings, street); weapons/:
-            weapons.ts (WEAPONS, the one table: WeaponId, WeaponSpec by kind, TurretKey; no Rapier, no Three.js), turrets.ts (TURRETS by key),
-            turrets/ (a builder per turret)
-sim/        simulation.ts (authoritative, player-agnostic: enlist, changeVehicle, the fixed step, hitscan, rockets, damage, wrecks, respawns, stuck recovery;
-            SimEvents to the view; runs headless), matchMode.ts (the mode contract: MatchMode, ModeRules, Feed, Seat, SupplyView), combat.ts (a weapon
-            in the match: trigger, hitscan), physics.ts (initPhysics, the static world), drive.ts (the ray-cast car; drivePerformance), scoring.ts
-            (Stats, assists, streaks, nemesis), ai/ (bots: brain.ts what a bot is, armBot, Plan hooks; perception.ts; navigation.ts routes;
-            think.ts targets, combat by gun, cover), difficulty.ts (DIFFICULTIES: how well bots play), loadout.ts (Loadout ids; parseLoadout, the
-            one reader for storage and the wire)
+content/    parts.ts (wheel, blade, lamp, spike, the turret's yoke, a mine); vehicles/: vehicles.ts (VEHICLES: handling, chassis, turret mount, armour,
+            a ram, garage copy), types.ts (Handling, Chassis, VehicleOptions, ModelParts), models.ts (MODELS by vehicle id; what every model shares:
+            the merged body, the turret on its ring, the wheels), models/ (a body builder per vehicle: razor.ts, brute.ts, scout.ts, buggy.ts,
+            rammer.ts); arenas/: arena.ts (the Arena contract: spawns, bases, zones, colliders, nav, emitters, minimap floor; clutterKit), maps.ts
+            (MAPS: name, preview, modes hosted; mapsFor), digest.ts (the arena's fingerprint, F3 ARENA, checked against the server's), scrapyard.ts,
+            city.ts, docks.ts, kit/ (props, ground, buildings, street, port); weapons/: weapons.ts (WEAPONS, the one table: WeaponId, WeaponSpec by
+            kind (gun, rocket, beam, missile, mine), TurretKey; pelletsOf, blastOf, sustainedDps; no Rapier, no Three.js), turrets.ts (TURRETS by
+            key), turrets/ (a builder per turret)
+sim/        simulation.ts (authoritative, player-agnostic: enlist, changeVehicle, the fixed step, hitscan, rockets and missiles (the lock), mines,
+            rams, damage, wrecks, respawns, stuck recovery; SimEvents to the view; runs headless), matchMode.ts (the mode contract: MatchMode,
+            ModeRules, Feed, Seat, SupplyView), combat.ts (a weapon in the match: trigger, a beam's heat, hitscan, a missile's lock), physics.ts
+            (initPhysics, the static world), drive.ts (the ray-cast car; drivePerformance), scoring.ts (Stats, assists, streaks, nemesis), ai/ (bots:
+            brain.ts what a bot is, armBot, Plan hooks; perception.ts; navigation.ts routes, round the mines a bot knows of; think.ts targets,
+            combat by gun, cover, mines laid, a ram's charge), difficulty.ts (DIFFICULTIES: how well bots play), loadout.ts (Loadout ids;
+            parseLoadout, the one reader for storage and the wire)
 modes/      modes.ts (MODES: the arena screen's cards, lineUp by size, the adapter factory), traits.ts (MODE_TRAITS: what shared code may know of a
             mode; MAX_SEATS, sideOf), matchSettings.ts (how a match is played; classic(mode)), roster.ts (who takes each seat; SeatPlan); items/
             (pickups any mode plugs in: SUPPLY, the catalogue, a match's supply, the tokens' view); scenery.ts (what the browser draws of a
             mode: tokens, MODE_SCENERY); views.ts (MODE_VIEWS: each mode's HudPanel and ResultsPanel, client-only); ffa/, tdm/: config, pure
             rules with an event queue, the MatchMode adapter (mode.ts), HudPanel.tsx, ResultsPanel.tsx, tests; ffa's hot zone (zone.ts), tdm's
             types and team AI (tactics.ts); docs in .claude/work/ffa/ and tdm/
-view/       view.ts (the match as the player sees and hears it: car models, turrets, wheels, interpolation; implements SimEvents), pilot.ts (input ->
-            controls, aim, lock-on), feed.ts (kill feed, callouts, announcer), input.ts, camera.ts (CHASE_CAMERA), effects.ts (pooled particles),
+view/       view.ts (the match as the player sees and hears it: car models, turrets, wheels, mines, interpolation; implements SimEvents), pilot.ts
+            (input -> controls, aim, lock-on, a missile's lock), feed.ts (kill feed, callouts, announcer), input.ts, camera.ts (CHASE_CAMERA), effects.ts (pooled particles),
             audio.ts + sounds.ts (Web Audio; every sound synthesized), settings.ts (the player's, in localStorage), turntable.ts (the garage stage)
 runtime/    runtime.ts (startGame: the match's loading steps, renderer, scene, match, composer, render loop, dev globals; dispose releases whatever
             exists; the arenas built, kept for the session), match.ts (one match: seats, wiring, fixed 60 Hz steps + interpolation, the player's
@@ -107,7 +109,7 @@ server/     main.ts, server.ts (/health, ws /match, the door, one fixed-step loo
             proposal, backfill, a lobby's match in a room of its own), matchmaker.ts (Classic, pure), lobbies.ts (custom lobbies, pure), room.ts (one
             match: seats, inputs, snapshots, results, the record and the journal), inputs.ts (a person's input queue, pure), journal.ts (the
             replay's lines: the one persisted format), recorder.ts, rewind.ts, fairplay.ts, records.ts (MATCH_DIR),
-            replay.ts + replay-main.ts, arenas.ts + headless.ts (the browser's builders in Node), digests.json, load.ts, browser.ts (the tests' page), testVehicle.ts (the tests' second vehicle)
+            replay.ts + replay-main.ts, arenas.ts + headless.ts (the browser's builders in Node), digests.json, load.ts, browser.ts (the tests' page)
 ```
 
 - Gameplay state (health, weapons, poses) lives in the simulation's combatants and Rapier bodies, the rules in the running mode; meshes only mirror it, interpolated between steps. React never re-renders per frame. Gameplay randomness comes from the match seed (`match.seed`, F3), never `Math.random`.

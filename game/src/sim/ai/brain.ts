@@ -2,6 +2,7 @@ import type RAPIER from '@dimforge/rapier3d-compat'
 import * as THREE from 'three'
 import { WEAPONS, type WeaponId, type WeaponSpec } from '../../content/weapons/weapons.ts'
 import { DIFFICULTIES, type Skill } from '../difficulty.ts'
+import type { VehicleId } from '../../content/vehicles/vehicles.ts'
 import type { DriveInput } from '../drive.ts'
 
 // Bots (sim/ai/): what a bot is — its tuning, its gun, what it reads of a
@@ -25,6 +26,20 @@ export const AI = {
   hideouts: [12, 20, 30], // metres out it looks for a hideout, twelve ways round
   lurk: [25, 55], // lies in wait only for an unseen target coming its way this far off
   mateGap: 3, // friendly fire on: a teammate this close to its line of fire holds its trigger
+  tail: [30, 0.9], // a rival this many metres behind it, within this many radians of its tail, is chasing it
+  crossing: [1, 3, 3, 3.2], // a rival due within this many metres of the spot this far behind it, between these seconds from now, is crossing it
+  bow: 1.5, // seconds ahead of its target a mine-layer drives for, across its bow
+  charge: 0.3, // and a machine with a ram, charging it
+  berth: [7, 150], // a leg of its route passing a known mine closer than this many metres costs this many more
+  dodge: [20, 7, 2], // a known mine this many metres ahead, within this many of its path, it swerves round this hard
+}
+
+// A mine as a bot knows of it: where it lies and whose side laid it. A bot
+// knows of every hostile mine within its detection range, as it knows of
+// every rival there, seen or not.
+export interface KnownMine {
+  position: THREE.Vector3
+  owner: { team: number }
 }
 
 // A bot's gun: one off the garage's roster (or the guns a match allows),
@@ -55,9 +70,10 @@ export interface Agent {
   speed: number // forward m/s
   health: number
   maxHealth: number
+  vehicle: VehicleId
   car: { body: RAPIER.RigidBody }
-  weapon: { spec: WeaponSpec; reload: number }
-  control: DriveInput & { fire: boolean; aim: THREE.Vector3 }
+  weapon: { spec: WeaponSpec; reload: number; lock: { target: number; time: number } }
+  control: DriveInput & { fire: boolean; aim: THREE.Vector3; lock: number }
   brain?: Brain
 }
 

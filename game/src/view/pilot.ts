@@ -68,6 +68,8 @@ export function createPilot({ surface, camera, world, chase, player, combatants,
     }
     aim.target = player.alive ? target : null
     aim.distance = target ? target.position.distanceTo(player.position) : 0
+    // a missile is to lock on whoever's in the sights; the simulation holds it, or doesn't
+    player.control.lock = aim.target && player.weapon.spec.kind === 'missile' ? aim.target.id : -1
   }
 
   // Which rivals the camera can see, for the HUD markers.

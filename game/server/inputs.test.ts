@@ -10,6 +10,7 @@ const input = (seq: number): Input => ({
   handbrake: false,
   fire: false,
   recover: false,
+  lock: -1,
   aim: { x: 0, y: 0, z: 0 },
   view: 0,
 })

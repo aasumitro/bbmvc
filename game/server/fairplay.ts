@@ -43,11 +43,12 @@ export interface FairTally {
   pulls: number // trigger pulls with the aim on a hostile
   quick: number // of those, within FAIRPLAY.quick steps of the aim reaching it
   hits: number // times this person's fire hurt a hostile
+  locks: number // locks their missiles took on a hostile (for review: aim help locks on everything)
 }
 
 export type FairFlag = 'hidden' | 'snaps' | 'quick'
 
-const blank = (): FairTally => ({ steps: 0, firing: 0, onTarget: 0, hidden: 0, snaps: 0, pulls: 0, quick: 0, hits: 0 })
+const blank = (): FairTally => ({ steps: 0, firing: 0, onTarget: 0, hidden: 0, snaps: 0, pulls: 0, quick: 0, hits: 0, locks: 0 })
 
 export function createFairPlay(seats: number) {
   const tallies = Array.from({ length: seats }, blank)
@@ -118,6 +119,10 @@ export function createFairPlay(seats: number) {
         tallies[seat].snaps++
         s.snap = null
       }
+    },
+    // `seat`'s missile took a lock on a hostile (the simulation holds it).
+    locked(seat: number) {
+      tallies[seat].locks++
     },
     // A new person in the seat: nothing of the last one's counts.
     reset(seat: number) {

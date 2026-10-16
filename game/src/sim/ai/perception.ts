@@ -1,24 +1,13 @@
 import RAPIER from '@dimforge/rapier3d-compat'
 import * as THREE from 'three'
-import type { WeaponSpec } from '../../content/weapons/weapons.ts'
+import { blastOf } from '../../content/weapons/weapons.ts'
 import { distance as flat } from '../../shared/math.ts'
-import { AI, type Agent } from './brain.ts'
+import { AI, type Agent, type KnownMine } from './brain.ts'
 
 // What a bot can tell of the world (sim/ai/): feelers off its nose, a clear
 // line to a target, teammates in its line of fire, open road between two
 // points, somewhere out of a rival's sight. Rays share one scratch origin
 // and direction: each finishes before the next starts.
-
-// How far round where it lands a round hurts: a rocket's blast; a gun's
-// round hurts only what it hits.
-function blastRadius(spec: WeaponSpec): number {
-  switch (spec.kind) {
-    case 'gun':
-      return 0
-    case 'rocket':
-      return spec.rocket.blast
-  }
-}
 
 const from = new THREE.Vector3()
 const along = new THREE.Vector3()
@@ -48,7 +37,7 @@ export function canSee(world: RAPIER.World, bot: Agent, target: Agent) {
 // distances: every machine drives on the ground.
 export function clearOfMates(bot: Agent, everyone: readonly Agent[]) {
   const aim = bot.control.aim
-  const blast = blastRadius(bot.weapon.spec)
+  const blast = blastOf(bot.weapon.spec)
   const dx = aim.x - bot.position.x
   const dz = aim.z - bot.position.z
   const length = dx * dx + dz * dz || 1
@@ -102,4 +91,55 @@ export function pickHideout(world: RAPIER.World, bot: Agent, target: Agent, out:
     }
   }
   return false
+}
+
+// A live rival within `AI.tail` behind the bot, off its tail: a mine laid now
+// lies in its way.
+export function chased(bot: Agent, everyone: readonly Agent[], heading: number) {
+  const [reach, cone] = AI.tail
+  for (const rival of everyone) {
+    if (!rival.alive || rival.team === bot.team) continue
+    const dx = rival.position.x - bot.position.x
+    const dz = rival.position.z - bot.position.z
+    const distance = Math.hypot(dx, dz)
+    if (distance < reach && -(dx * Math.sin(heading) + dz * Math.cos(heading)) > distance * Math.cos(cone)) return true
+  }
+  return false
+}
+
+// A live rival whose path, held as it goes, runs over the spot behind the
+// bot (where a mine laid now would lie) between `AI.crossing` seconds from
+// now: once the mine has armed, before the rival is likely to turn.
+export function crossing(bot: Agent, everyone: readonly Agent[], heading: number) {
+  const [soonest, latest, near, behind] = AI.crossing
+  const x = bot.position.x - Math.sin(heading) * behind
+  const z = bot.position.z - Math.cos(heading) * behind
+  for (const rival of everyone) {
+    if (!rival.alive || rival.team === bot.team) continue
+    for (let t = soonest; t <= latest; t += 0.5)
+      if (Math.hypot(rival.position.x + rival.velocity.x * t - x, rival.position.z + rival.velocity.z * t - z) < near) return true
+  }
+  return false
+}
+
+// The nearest hostile mine the bot knows of in its way: within `AI.dodge`
+// metres ahead and near enough its path to go off under it. Which way to
+// steer to miss it, +1 left, -1 right, weighed by how near it is; 0 for none.
+export function dodge(bot: Agent, mines: readonly KnownMine[], heading: number) {
+  const [reach, wide] = AI.dodge
+  const fx = Math.sin(heading)
+  const fz = Math.cos(heading)
+  let nearest = reach
+  let away = 0
+  for (const mine of mines) {
+    if (mine.owner.team === bot.team) continue
+    const dx = mine.position.x - bot.position.x
+    const dz = mine.position.z - bot.position.z
+    const along = dx * fx + dz * fz
+    const side = dx * fz - dz * fx // to the bot's left, + (its left is +X facing +Z)
+    if (along <= 0 || along >= nearest || Math.abs(side) > wide) continue
+    nearest = along
+    away = (side > 0 ? -1 : 1) * (1 - along / reach)
+  }
+  return away
 }

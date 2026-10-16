@@ -117,12 +117,13 @@ export function createNetClient({ link, world, combatants, player, mode, events,
 
   // Takes everything that has arrived, in order. After a long gap (the tab
   // was hidden) it catches up: the effects in between are dropped, wrecks
-  // and respawns shown as they stand now, the rules' events all kept.
+  // and respawns shown as they stand now, the rules' events all kept, and
+  // mines laid and gone (those held for the drawing too).
   function receive(now: number) {
     const messages = link.take()
     const catchUp = now - lastTaken > CATCH_UP
     lastTaken = now
-    if (catchUp) later.length = 0
+    if (catchUp) for (const event of later.splice(0)) play(event, true)
     for (const { message, at } of messages) {
       if (message.t === 's') snapshot(message, at, catchUp)
       else if (message.t === 'st') state(message)
@@ -146,6 +147,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
     serverNow = s.now / 1000
     const me = readMe(s.me)
     Object.assign(player.weapon, { ammo: me.ammo, reload: me.reload, cooldown: me.cooldown })
+    Object.assign(player.weapon.lock, me.lock)
     player.stuck = me.stuck
     player.recovery = me.recovery
     for (const row of s.ev) {
@@ -234,6 +236,7 @@ export function createNetClient({ link, world, combatants, player, mode, events,
   const at = new THREE.Vector3()
   const shot: Shot = { point: new THREE.Vector3(), normal: new THREE.Vector3(), collider: null }
   let ground: RAPIER.Collider | null = null // something solid for a round that struck the arena (the view only asks whether it struck)
+  const firedLast = { shooter: -1, tick: -1 } // a shot's pellets come as an 'sh' each: the gun fires once
   world.forEachCollider((collider) => void (ground ??= collider))
   const put = (v: THREE.Vector3, { x, y, z }: { x: number; y: number; z: number }) => v.set(x, y, z)
 
@@ -268,6 +271,10 @@ export function createNetClient({ link, world, combatants, player, mode, events,
       case 'rc':
         if (who(event.seat) === player) hard = true
         break
+      case 'ml':
+        return events.laid(event.id, who(event.owner), put(at, event.at))
+      case 'mg':
+        return events.gone(event.id)
     }
     if (catchUp) return // the rest are effects: gone by now
     switch (event.code) {
@@ -280,7 +287,8 @@ export function createNetClient({ link, world, combatants, player, mode, events,
         shot.collider = event.struck ? (victim?.car.body.collider(0) ?? ground) : null
         if (shooter === player) fromOwnGun(heading.subVectors(shot.point, muzzle))
         else heading.subVectors(shot.point, muzzle).normalize()
-        events.fired(shooter, muzzle, heading)
+        if (event.shooter !== firedLast.shooter || event.tick !== firedLast.tick) events.fired(shooter, muzzle, heading)
+        Object.assign(firedLast, { shooter: event.shooter, tick: event.tick })
         return events.shot(shooter, muzzle, shot, victim)
       }
       case 'ln':
@@ -426,6 +434,12 @@ export function createNetClient({ link, world, combatants, player, mode, events,
 
   // Seconds until the room reaches `tick`, from the newest snapshot; Infinity for none (-1).
   const untilTick = (tick: number, now: number) => (tick < 0 ? Infinity : Math.max(0, (tick - net.tick) / RATE.step - (now - net.arrivedAt) / 1000))
+
+  // The mines down when the player joined, as the welcome lists them.
+  for (const row of link.welcome.mines) {
+    const event = decode(row)
+    if (event) play(event, true)
+  }
 
   return {
     net,

@@ -183,6 +183,82 @@ export function kill() {
   return finish(data, 1.1, 0.8)
 }
 
+// Cannon round: a sharp crack over a deep thump, the blast's roar closing
+// down into a rumble, then the breech clanking back.
+export function cannon(seed: number) {
+  const rng = createRng(seed)
+  const data = samples(1.1)
+  let body = 0,
+    rumble = 0,
+    phase = 0
+  for (let i = 0; i < data.length; i++) {
+    const t = i / RATE
+    const n = rng() * 2 - 1
+    body += pole(300 + 3200 * decay(t, 0.05)) * (n - body)
+    rumble += pole(160) * (n - rumble)
+    phase += (TAU * (38 + 150 * decay(t, 0.022))) / RATE
+    data[i] =
+      n * decay(t, 0.004) * 0.9 +
+      body * attack(t, 0.001) * decay(t, 0.12) * 2.6 +
+      rumble * attack(t, 0.01) * decay(t, 0.4) * 3 +
+      Math.sin(phase) * attack(t, 0.002) * decay(t, 0.16) * 1.4
+  }
+  ring(
+    data,
+    [
+      [310, 0.12, 0.05],
+      [740, 0.07, 0.04],
+      [1530, 0.04, 0.025],
+    ],
+    0.14,
+  )
+  return finish(data, 1.5, 0.98)
+}
+
+// Shotgun shell: a wide crack and a punchy boom over a short thump, then the
+// pump racked back and forward.
+export function shotgun(seed: number) {
+  const rng = createRng(seed)
+  const data = samples(0.7)
+  let body = 0,
+    low = 0,
+    phase = 0
+  for (let i = 0; i < data.length; i++) {
+    const t = i / RATE
+    const n = rng() * 2 - 1
+    body += pole(500 + 4500 * decay(t, 0.03)) * (n - body)
+    low += pole(220) * (n - low)
+    phase += (TAU * (45 + 130 * decay(t, 0.02))) / RATE
+    data[i] =
+      n * decay(t, 0.004) * 0.9 +
+      body * attack(t, 0.0008) * decay(t, 0.07) * 2.4 +
+      low * attack(t, 0.005) * decay(t, 0.16) * 2.2 +
+      Math.sin(phase) * attack(t, 0.0015) * decay(t, 0.09) * 1.2
+  }
+  click(data, 0.36, 2100, rng)
+  click(data, 0.48, 1700, rng)
+  return finish(data, 1.5, 0.95)
+}
+
+// Laser pulse: a buzzing tone with a bright edge, a tenth of a second and a
+// little more, so pulses ten a second run together into a steady hum.
+export function zap(seed: number) {
+  const rng = createRng(seed)
+  const data = samples(0.12)
+  const base = 160 + rng() * 12
+  let phase = 0,
+    edge = 0
+  for (let i = 0; i < data.length; i++) {
+    const t = i / RATE
+    phase += base / RATE
+    const n = rng() * 2 - 1
+    edge += pole(5000) * (n - edge)
+    const envelope = attack(t, 0.004) * Math.min(1, (0.12 - t) / 0.02) // in, held, out over the last 20 ms
+    data[i] = (saw(phase) * 0.6 + saw(phase * 2.01) * 0.3 + Math.sin(TAU * phase * 6) * 0.25 + edge * 0.15) * envelope
+  }
+  return finish(data, 1.3, 0.8)
+}
+
 // Fireball: a sub drop, roaring noise closing down, crackle in the tail.
 export function explosion(seed: number) {
   const rng = createRng(seed)

@@ -17,9 +17,11 @@ in the DOM or in meshes.
 | a seat's vehicle, and so its body | `Combatant.vehicle` and `car`: the roster's (bots draw theirs from the match seed); online the person's, the body replaced in place when a seat changes hands (`changeVehicle`) | the view's model (`refit`), the HUD's hull |
 | vehicle pose and velocity | Rapier body; copied once per step into `Combatant.position/rotation/velocity/speed` (`last` keeps the step before) | `view/view.ts` models, interpolated |
 | wheel state (suspension, contact, spin) | Rapier ray-cast vehicle controller | `poseWheels`, dust, tyre squeal, F3 overlay |
-| weapon ammo, cooldown, reload | `Combatant.weapon` (`sim/combat.ts` `pullTrigger`; FFA ammo pickup) | HUD weapon panel |
-| rockets in flight | `sim/simulation.ts` (private) | view trails and bursts via `SimEvents` |
-| controls (throttle, steer, handbrake, fire, aim) | the control source: `view/pilot.ts` (player), `sim/ai/` brain (bots) | turrets, engine audio |
+| weapon ammo (a beam's heat), cooldown, reload, a missile's lock | `Combatant.weapon` (`sim/combat.ts` `pullTrigger`, `sim/simulation.ts` `holdLock`; FFA ammo pickup); online the player's own from the snapshot's `me` row | HUD weapon panel |
+| rockets and missiles in flight | `sim/simulation.ts` (private) | view trails and bursts via `SimEvents` |
+| mines down | `sim/simulation.ts` (`sim.mines`; the welcome lists them for a page that joins) | the view's mine models via `SimEvents` (`laid`, `gone`); bots' routes |
+| a pair's last ram strike | `sim/simulation.ts` (private) | — |
+| controls (throttle, steer, handbrake, fire, aim, lock) | the control source: `view/pilot.ts` (player), `sim/ai/` brain (bots) | turrets, engine audio |
 | match seed | practice: `runtime/practice.ts` (`match.seed`; a new one per match and restart); online: the room's, from the welcome → the simulation's stream (bots, spread, wreck throw), the roster's (the bots' guns and vehicles) and the rules' (items, zones) | F3 overlay |
 
 One deliberate duplicate: the pose exists in Rapier and on the combatant,

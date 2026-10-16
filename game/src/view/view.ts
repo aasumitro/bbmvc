@@ -10,7 +10,8 @@ import type { Combatant, SimEvents } from '../sim/simulation.ts'
 import { poseWheels } from '../sim/drive.ts'
 import { wrap } from '../shared/math.ts'
 import { MODELS } from '../content/vehicles/models.ts'
-import type { WeaponKind } from '../content/weapons/weapons.ts'
+import { buildMine } from '../content/parts.ts'
+import type { WeaponId } from '../content/weapons/weapons.ts'
 import { VEHICLES } from '../content/vehicles/vehicles.ts'
 
 // The match as the local player sees and hears it: a model per machine,
@@ -20,9 +21,17 @@ import { VEHICLES } from '../content/vehicles/vehicles.ts'
 // through the simulation's SimEvents; it decides nothing about the match.
 
 const WHIZ_RANGE = 4 // metres: a rival's round passing this close to the player is heard going by
-// By how the weapon fires: each round's cue, and whether its barrels spin while the trigger is held.
-const FIRE_CUE: Record<WeaponKind, SoundCue> = { gun: 'shot', rocket: 'launch' }
-const SPINS: Record<WeaponKind, boolean> = { gun: true, rocket: false }
+// Each gun as heard: its round's cue, whether its barrels spin while the
+// trigger is held, and how hard the player's own shot kicks the camera.
+const GUN_SOUNDS: Record<WeaponId, { cue: SoundCue; spins: boolean; kick: number }> = {
+  minigun: { cue: 'shot', spins: true, kick: 0 },
+  rocketPod: { cue: 'launch', spins: false, kick: 0.06 },
+  cannon: { cue: 'cannon', spins: false, kick: 0.1 },
+  shotgun: { cue: 'shotgun', spins: false, kick: 0.08 },
+  laser: { cue: 'zap', spins: false, kick: 0 },
+  missiles: { cue: 'launch', spins: false, kick: 0.05 },
+  mines: { cue: 'hitGround', spins: false, kick: 0 },
+}
 
 // A machine's model, and the parts of it gameplay moves.
 interface CarView {
@@ -95,6 +104,15 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
   wind.set(1)
   const burning = new Map<Combatant, Loop>()
 
+  // Mines down, by id, each a copy of one model; a light blinks on each once it's armed.
+  let mineModel: THREE.Group | null = null
+  const mines = new Map<number, { model: THREE.Object3D; light: THREE.Object3D; armed: number }>()
+  let clock = 0
+  function clearMines() {
+    for (const { model } of mines.values()) scene.remove(model)
+    mines.clear()
+  }
+
   const muzzleLight = new THREE.PointLight('#ffb35c', 0, 9, 2) // lights the roof and yard around the player's gun
   muzzleLight.position.set(0, 0, VEHICLES[player.vehicle].turret.barrel + 0.2)
   cars[player.id].gun.add(muzzleLight)
@@ -130,16 +148,19 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
   const struck = new THREE.Vector3()
   const events: SimEvents = {
     fired(c, muzzle, heading) {
-      effects.muzzle(muzzle, heading)
-      const cue = FIRE_CUE[c.weapon.spec.kind]
+      if (c.weapon.spec.kind === 'beam') effects.glint(muzzle)
+      else effects.muzzle(muzzle, heading)
+      const { cue, kick } = GUN_SOUNDS[c.weapon.spec.id]
       if (c !== player) return playSound(cue, muzzle)
       muzzleFlash = 1
-      if (cue === 'launch') chase.shake(0.06)
+      if (kick) chase.shake(kick)
       playSound(cue)
     },
     shot(c, muzzle, shot, victim) {
-      effects.tracer(muzzle, shot.point)
-      if (c !== player && player.alive && victim !== player) whizPast(muzzle, shot.point)
+      const beam = c.weapon.spec.kind === 'beam'
+      if (beam) effects.beam(muzzle, shot.point)
+      else effects.tracer(muzzle, shot.point)
+      if (!beam && c !== player && player.alive && victim !== player) whizPast(muzzle, shot.point)
       if (!shot.collider) return
       effects.impact(shot.point, shot.normal, !!victim)
       if (victim !== player) playSound(victim ? 'hitMetal' : 'hitGround', shot.point)
@@ -201,6 +222,22 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
     },
     recovered(c) {
       if (c === player) chase.snap()
+    },
+    laid(id, owner, at) {
+      if (mines.has(id)) return // a page that joined as it went down hears of it twice
+      mineModel ??= buildMine()
+      const model = mineModel.clone()
+      model.position.copy(at)
+      scene.add(model)
+      const { spec } = owner.weapon
+      mines.set(id, { model, light: model.getObjectByName('light')!, armed: clock + (spec.kind === 'mine' ? spec.mine.arm : 1) })
+      playSound('hitGround', at)
+    },
+    gone(id) {
+      const mine = mines.get(id)
+      if (!mine) return
+      scene.remove(mine.model)
+      mines.delete(id)
     },
   }
 
@@ -264,7 +301,7 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
         c === player ? undefined : cars[i].model.position,
       )
     })
-    const firing = player.alive && player.control.fire && player.weapon.reload === 0 && SPINS[player.weapon.spec.kind]
+    const firing = player.alive && player.control.fire && player.weapon.reload === 0 && GUN_SOUNDS[player.weapon.spec.id].spins
     gunSpin.set(firing ? 1 : 0, firing ? 1 : 0.6)
     const grounded = player.car.controller.wheelIsInContact(2) || player.car.controller.wheelIsInContact(3)
     const braking = player.control.throttle * player.speed < 0 && Math.abs(player.speed) > 6 ? 0.35 : 0
@@ -293,6 +330,8 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
       ambient(dt)
       sound(dt)
       effects.update(camera, surface.height, dt)
+      clock += dt
+      for (const [id, { light, armed }] of mines) light.visible = clock >= armed && (clock * 2 + id * 0.37) % 1 < 0.4
       muzzleLight.intensity = 60 * muzzleFlash
       muzzleFlash = Math.max(0, muzzleFlash - dt * 25)
       feedback.hit = Math.max(0, feedback.hit - dt * 5)
@@ -311,6 +350,7 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
     },
     restart() {
       effects.clear()
+      clearMines()
       Object.assign(feedback, { hit: 0, kill: 0, damage: 0, messageTime: 0, pickupTime: 0 })
     },
     dispose() {
@@ -320,6 +360,8 @@ export function createMatchView({ scene, camera, surface, world, arena, combatan
         scene.remove(model)
         disposeGeometries(model)
       }
+      clearMines()
+      if (mineModel) disposeGeometries(mineModel)
     },
   }
 }

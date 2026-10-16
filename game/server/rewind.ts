@@ -13,8 +13,9 @@ import { VEHICLES } from '../src/content/vehicles/vehicles.ts'
 // oriented boxes, plain maths), the nearest hit taking it. A machine that was
 // a wreck then, or has died since, still stops the round but takes no hit:
 // that life is over, and the one it lives now is somewhere else. An empty
-// seat's machine (out of play then) stops nothing. Rockets fly in the
-// present and are never rewound.
+// seat's machine (out of play then) stops nothing. Rockets and missiles fly
+// in the present and are never rewound; a person's missile lock is judged
+// where their page drew its target (`where`).
 
 const SPAN = 60 // ticks of poses kept (a second)
 const ABSENT = -2 // a life: out of play

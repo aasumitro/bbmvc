@@ -3,10 +3,12 @@ import * as THREE from 'three'
 import type { NavGraph } from '../../content/arenas/arena.ts'
 import { distance as flat, wrap } from '../../shared/math.ts'
 import type { WeaponKind, WeaponSpec } from '../../content/weapons/weapons.ts'
+import { VEHICLES } from '../../content/vehicles/vehicles.ts'
 import type { Skill } from '../difficulty.ts'
-import { AI, type Agent, type Brain, type Plan } from './brain.ts'
+import { AI, type Agent, type Brain, type KnownMine, type Plan } from './brain.ts'
+import { locked } from '../combat.ts'
 import { travel } from './navigation.ts'
-import { canSee, clearOfMates, feel, open, pickHideout } from './perception.ts'
+import { canSee, chased, clearOfMates, crossing, dodge, feel, open, pickHideout } from './perception.ts'
 
 // A bot's step (sim/ai/): its target, where it goes, how it drives, where it
 // aims and when it fires, written into its controls. Its scratch vectors are
@@ -14,18 +16,31 @@ import { canSee, clearOfMates, feel, open, pickHideout } from './perception.ts'
 
 // How each kind of weapon wants to fight: in sight and closer than `engage`,
 // it circles the target at a radius drawn from `circle`, or keeps about
-// `keep` off it where there's no room to circle; it fires from `fire` in. A
+// `keep` off it where there's no room to circle; it fires from `fire` in, or
+// from its gun's range where that's shorter (a Shotgun's). A
 // rocket pod holds off, where its splash lands and a rocket has time to be
-// led, and lets a rocket go only with the gun on the lead (`onLead`).
+// led, and lets a rocket go only with the gun on the lead (`onLead`); a beam
+// holds the middle distance, where it stays on a target; missiles hold off
+// as rockets do, and leave only once the lock is on (they turn after it). A
+// mine-layer has nothing to shoot: it cuts across its target's bow, and lays
+// a mine whenever a rival is on its tail (`chased`) or about to cross the
+// spot behind it (`crossing`).
 const TACTICS = {
   gun: { engage: 38, circle: [14, 24], keep: 16, fire: 55, onLead: false },
   rocket: { engage: 60, circle: [24, 36], keep: 30, fire: 110, onLead: true },
+  beam: { engage: 50, circle: [20, 32], keep: 22, fire: 100, onLead: false },
+  missile: { engage: 60, circle: [24, 36], keep: 30, fire: 150, onLead: false },
+  mine: { engage: 30, circle: [10, 18], keep: 8, fire: 40, onLead: false },
 } satisfies Record<WeaponKind, unknown>
 
-// Seconds a round takes to fly `distance`: a gun's is there at once.
+// Seconds a round takes to fly `distance`: a gun's is there at once; a
+// missile turns after its target, so it's laid on the target, not ahead.
 function flightTime(spec: WeaponSpec, distance: number): number {
   switch (spec.kind) {
     case 'gun':
+    case 'beam':
+    case 'missile':
+    case 'mine':
       return 0
     case 'rocket':
       return distance / spec.rocket.speed
@@ -75,14 +90,25 @@ export function leadTarget(bot: Agent, target: Agent, skill: Skill, out: THREE.V
 }
 
 // Writes the bot's controls for this physics step. `random`: the match's
-// seeded stream (0..1), so a match replays the same from the same seed.
-export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.World, nav: NavGraph, dt: number, random: () => number, plan?: Plan) {
+// seeded stream (0..1), so a match replays the same from the same seed;
+// `mines`: every mine down, which its routes keep clear of (navigation.ts).
+export function think(
+  bot: Agent,
+  everyone: readonly Agent[],
+  world: RAPIER.World,
+  nav: NavGraph,
+  dt: number,
+  random: () => number,
+  plan?: Plan,
+  mines: readonly KnownMine[] = [],
+) {
   const brain = bot.brain!
   const { skill } = brain
   const control = bot.control
   const q = bot.rotation
   const heading = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y))
   const style = TACTICS[bot.weapon.spec.kind]
+  const firing = Math.min(style.fire, bot.weapon.spec.range) // it fires only where its rounds get to
   const hurt = bot.health < bot.maxHealth * AI.hurt
 
   brain.grudge -= dt
@@ -138,7 +164,7 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
   brain.hide -= dt
   brain.decide -= dt
   const atHideout = flat(brain.hideout, bot.position) < 3
-  if (brain.hide > 0 && (!target || urgent || (brain.canSee && distance < style.fire && (brain.lurking || atHideout)))) {
+  if (brain.hide > 0 && (!target || urgent || (brain.canSee && distance < firing && (brain.lurking || atHideout)))) {
     if (brain.lurking && brain.canSee) brain.burst = Math.max(brain.burst, between(skill.burst, random))
     brain.hide = 0
     brain.replan = 0
@@ -160,24 +186,28 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
     goal.copy(atHideout ? target!.position : brain.hideout) // open road to it: straight there
     hold = atHideout
   } else if (target && brain.canSee && brain.direct && !urgent && distance < style.engage) {
-    // circling where there's room; hemmed in by buildings, it weaves at its range instead of parking
-    goal.copy(brain.room && brain.jink <= 0 ? circling : weaving)
-    backOff = !brain.room && distance < keep * 0.6
+    // circling where there's room; hemmed in by buildings, it weaves at its range instead of parking;
+    // a machine with a ram charges the target, and a mine-layer cuts across its bow, its mines going down in its way
+    const rams = !!VEHICLES[bot.vehicle].ram
+    const ahead = rams ? AI.charge : bot.weapon.spec.kind === 'mine' ? AI.bow : -1
+    if (ahead >= 0) goal.copy(target.position).addScaledVector(target.velocity, ahead)
+    else goal.copy(brain.room && brain.jink <= 0 ? circling : weaving)
+    backOff = !rams && !brain.room && distance < keep * 0.6
     brain.replan = 0
   } else if (target && brain.canSee && brain.direct && !urgent) {
     goal.copy(weaving) // closing in, weaving
     brain.replan = 0
   } else if (errand && (urgent || !target)) {
-    limit = travel(bot, brain, world, nav, errandAt, dt, goal)
+    limit = travel(bot, brain, world, nav, errandAt, dt, goal, mines)
   } else if (target) {
-    limit = travel(bot, brain, world, nav, target.position, dt, goal)
+    limit = travel(bot, brain, world, nav, target.position, dt, goal, mines)
   } else {
     const roam = nav.nodes[brain.roam % nav.nodes.length]
     if (flat(roam, bot.position) < AI.arrive) {
       brain.roam = Math.floor(random() * nav.nodes.length)
       brain.replan = 0
     }
-    limit = travel(bot, brain, world, nav, roam, dt, goal)
+    limit = travel(bot, brain, world, nav, roam, dt, goal, mines)
   }
 
   const error = wrap(Math.atan2(goal.x - bot.position.x, goal.z - bot.position.z) - heading)
@@ -201,7 +231,7 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
     steer = brain.side
   }
 
-  // Feelers steer around walls and junk; a blocked nose turns toward open space.
+  // Feelers steer around walls and junk; a blocked nose turns toward open space; a mine in its way, round it.
   const reach = 5 + Math.abs(bot.speed) * 0.5
   const left = feel(world, bot, heading, 0.45, reach)
   const right = feel(world, bot, heading, -0.45, reach)
@@ -212,6 +242,7 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
       throttle = Math.min(throttle, 0.5)
       steer += (left >= right ? 1 : -1) * (1 - ahead) * 2
     }
+    steer += dodge(bot, mines, heading) * AI.dodge[2]
   }
   steer = THREE.MathUtils.clamp(steer, -1, 1)
 
@@ -251,7 +282,7 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
   brain.sight -= dt
   if (brain.sight <= 0) {
     brain.sight = 0.2
-    brain.canSee = !!target && distance < style.fire && canSee(world, bot, target)
+    brain.canSee = !!target && distance < firing && canSee(world, bot, target)
     brain.clear = !plan?.careful || clearOfMates(bot, everyone)
     brain.direct = brain.canSee && open(world, bot.position, target!.position)
     brain.room = brain.direct && open(world, bot.position, circling)
@@ -265,7 +296,14 @@ export function think(bot: Agent, everyone: readonly Agent[], world: RAPIER.Worl
     brain.burst += dt
     if (brain.burst >= 0) brain.burst = brain.canSee ? between(skill.burst, random) : -0.3
   }
-  let fire = brain.canSee && brain.clear && brain.burst > 0
+  const { kind } = bot.weapon.spec
+  // a missile locks on the target in its sights first, then lets go (the simulation holds the lock)
+  control.lock = kind === 'missile' && brain.canSee && target ? target.id : -1
+  // a mine goes down whenever a rival is on its tail; every other gun fires at the target in sight
+  let fire =
+    kind === 'mine'
+      ? chased(bot, everyone, heading) || crossing(bot, everyone, heading)
+      : brain.canSee && brain.clear && brain.burst > 0 && (kind !== 'missile' || locked(bot.weapon))
   // a rocket leaves only with the gun on the lead (or the target on top of it): there are six, slow to reload
   if (fire && target && style.onLead && distance > 12)
     fire = toAim.subVectors(control.aim, bot.position).angleTo(toLead.subVectors(lead, bot.position)) < AI.aligned

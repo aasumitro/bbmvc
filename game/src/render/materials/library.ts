@@ -144,7 +144,7 @@ export const materials = {
   // arena
   concrete: () => surface(concrete()),
   barrier: () => surface(concrete({ stripe: '#8e1b12' })),
-  corrugated: (paint: string) => surface(corrugated({ paint, rust: 0.6, size: 512 })),
+  corrugated: (paint: string, rust = 0.6) => surface(corrugated({ paint, rust, size: 512 })),
   // junk-pile car shells: geometry must carry vertex colours (dark glass and tyres)
   wreck: () => surface(plating({ paint: '#b3aca2', patch: '#8c867d', rust: 0.8, wear: 0.8, rivets: false, size: 512 }), { vertexColors: true }),
   drum: () => surface(plating({ paint: '#d8d4cc', patch: '#d8d4cc', rust: 0.6, wear: 0.5, rows: 3, rivets: false, size: 512 })),
@@ -160,6 +160,8 @@ export const materials = {
   roof: () => surface(concrete({ tint: '#4a4540', cracks: 0.2 })),
   bodywork: (paint: string) => surface(plating({ paint, patch: paint, rust: 0.3, wear: 0.3, rows: 2, rivets: false, size: 512 })), // buses, trucks: big smooth panels
   bark: () => surface(bark()),
+  // docks: the harbour, dark and glassy, mirroring the sky
+  water: () => memo('water', () => new THREE.MeshStandardMaterial({ color: '#0d171c', roughness: 0.12, metalness: 0.35 })),
   facade,
   // soft spot of light laid on the ground under street lamps
   glow: (color: string, intensity: number) => additive(`glow:${color}:${intensity}`, () => (glowTexture ??= createGlowTexture()), color, intensity),

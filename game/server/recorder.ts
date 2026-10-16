@@ -20,10 +20,14 @@ export function createRecorder(tick: () => number) {
       const { spec } = c.weapon
       switch (spec.kind) {
         case 'gun':
-          return // a hitscan round is written whole when it lands (`shot`)
+        case 'beam':
+          return // a hitscan round (a beam's pulse) is written whole when it lands (`shot`)
         case 'rocket':
+        case 'missile':
           events.push(encode({ code: 'ln', tick: tick(), shooter: c.id, muzzle, heading }))
           return
+        case 'mine':
+          return // never fired: laid (`laid`)
         default:
           return spec satisfies never
       }
@@ -57,6 +61,12 @@ export function createRecorder(tick: () => number) {
     },
     recovered(c) {
       events.push(encode({ code: 'rc', tick: tick(), seat: c.id }))
+    },
+    laid(id, owner, at) {
+      events.push(encode({ code: 'ml', tick: tick(), id, owner: owner.id, at }))
+    },
+    gone(id) {
+      events.push(encode({ code: 'mg', tick: tick(), id }))
     },
   }
 

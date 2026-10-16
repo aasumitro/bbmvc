@@ -58,6 +58,10 @@ function mine([code, , ...f]: WireEvent, me: number) {
   return false
 }
 
+// The codes the page read by position. The mines' ('ml', 'mg') came after
+// the codec and have only been read through it (src/net/events.test.ts).
+const POSITIONAL = new Set(['sh', 'ln', 'rk', 'bu', 'hu', 'wr', 'cr', 'rl', 'sp', 'rc', 'ru', 'go'])
+
 // A minute and a bit of a bots-only free for all on The City (pickups on),
 // every snapshot's events as a page receives them.
 async function recorded() {
@@ -87,6 +91,7 @@ async function recorded() {
 describe('the codec against the positional reads', async () => {
   const rows = await recorded()
   const codes = new Set(rows.map(([code]) => code))
+  const known = rows.filter(([code]) => POSITIONAL.has(code))
 
   it('heard a match’s worth of events', () => {
     expect(rows.length).toBeGreaterThan(1000)
@@ -94,11 +99,11 @@ describe('the codec against the positional reads', async () => {
   })
 
   it('decodes every event to the fields the page read', () => {
-    for (const row of rows) expect(decode(row)).toEqual(positional(row))
+    for (const row of known) expect(decode(row)).toEqual(positional(row))
   })
 
   it('names the seats that made an event the player’s, for every seat', () => {
-    for (const row of rows) for (let me = 0; me < 8; me++) expect([row[0], me, owners(decode(row)!).includes(me)]).toEqual([row[0], me, mine(row, me)])
+    for (const row of known) for (let me = 0; me < 8; me++) expect([row[0], me, owners(decode(row)!).includes(me)]).toEqual([row[0], me, mine(row, me)])
   })
 
   it('plays at once only the rules’ events and a restart', () => {

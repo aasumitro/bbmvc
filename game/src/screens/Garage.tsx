@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { sustainedDps, WEAPONS, type WeaponId, type WeaponKind, type WeaponSpec } from '../content/weapons/weapons.ts'
+import { pelletsOf, sustainedDps, WEAPONS, type WeaponId, type WeaponKind, type WeaponSpec } from '../content/weapons/weapons.ts'
 import { MENU_BACKDROP } from '../runtime/loading.ts'
 import type { Loadout } from '../sim/loadout.ts'
 import { createTurntable } from '../view/turntable.ts'
 import { drivePerformance } from '../sim/drive.ts'
 import { VEHICLES, type VehicleId, type VehicleSpec } from '../content/vehicles/vehicles.ts'
-import { ActionButton, Menu, Pager } from './Menu.tsx'
+import { Menu, Pager } from './Menu.tsx'
 
+// An editor only: the player picks a vehicle and a gun, each kept as it
+// changes (runtime/stored.ts); Back returns to the main menu, whose Play
+// takes the loadout to the arena screen.
 interface GarageProps {
   loadout: Loadout
   onLoadout: (loadout: Loadout) => void
   onBack: () => void
-  onSelect: () => void // take this vehicle on to arena selection
 }
 
 interface NavItem {
@@ -28,8 +30,9 @@ const NAV_ITEMS: NavItem[] = [
 type Spec = [label: string, value: string]
 
 // Worked out from the tuning the simulation runs on, so every figure is what
-// the car does in the arena. Turning circle: outer front wheel at full lock.
-function vehicleSpecs({ handling, chassis, armour }: VehicleSpec): Spec[] {
+// the car does in the arena. Turning circle: outer front wheel at full lock;
+// a ram's blow: flat out into a car standing still.
+function vehicleSpecs({ handling, chassis, armour, ram }: VehicleSpec): Spec[] {
   const drive = drivePerformance(handling)
   const [, halfTrack, halfWheelbase] = chassis.wheels[0]
   return [
@@ -39,6 +42,7 @@ function vehicleSpecs({ handling, chassis, armour }: VehicleSpec): Spec[] {
     ['Weight', `${handling.mass.toLocaleString('en')} kg`],
     ['Turning circle', `${(2 * ((2 * halfWheelbase) / Math.sin(handling.steerLock) + halfTrack)).toFixed(1)} m`],
     ['Armour', `${armour} HP`],
+    ...(ram ? [['Ram', `${Math.round(ram.damage * drive.topSpeed)} HP flat out`] satisfies Spec] : []),
   ]
 }
 const WEAPON_IDS = Object.keys(WEAPONS) as WeaponId[]
@@ -49,25 +53,60 @@ const FLEET = VEHICLE_IDS.length > 1 // a vehicle pager once there's a choice
 const turn = <K extends string>(ids: K[], at: K, step: number) => ids[(ids.indexOf(at) + step + ids.length) % ids.length]
 
 // By how the weapon fires: what a round is called (one, many), and the rows only that kind has.
-const ROUND: Record<WeaponKind, [string, string]> = { gun: ['round', 'rounds'], rocket: ['rocket', 'rockets'] }
+const ROUND: Record<WeaponKind, [string, string]> = {
+  gun: ['round', 'rounds'],
+  rocket: ['rocket', 'rockets'],
+  beam: ['pulse', 'pulses'],
+  missile: ['missile', 'missiles'],
+  mine: ['mine', 'mines'],
+}
 function kindSpecs(w: WeaponSpec): Spec[] {
   switch (w.kind) {
     case 'gun':
-      return []
+      return pelletsOf(w) > 1 ? [['Pellets', `${pelletsOf(w)} a shot`]] : []
     case 'rocket':
       return [
         ['Rocket speed', `${w.rocket.speed} m/s`],
         ['Blast radius', `${w.rocket.blast} m`],
       ]
+    case 'beam':
+      return [
+        ['Overheats after', `${(w.magazine / w.fireRate).toFixed(1)} s of fire`],
+        ['Cools in', `${w.reloadTime.toFixed(1)} s`],
+      ]
+    case 'missile':
+      return [
+        ['Missile speed', `${w.missile.speed} m/s`],
+        ['Blast radius', `${w.missile.blast} m`],
+        ['Turns', `${Math.round((w.missile.turn * 180) / Math.PI)}° a second`],
+        ['Lock', `${w.missile.lock.toFixed(1)} s on target`],
+      ]
+    case 'mine':
+      return [
+        ['Blast radius', `${w.mine.blast} m`],
+        ['Goes off within', `${w.mine.trigger} m`],
+        ['Arms after', `${w.mine.arm.toFixed(1)} s`],
+        ['Lies for', `${w.mine.life} s`],
+        ['Down at once', `${w.mine.down}`],
+      ]
   }
 }
 
+// What a weapon deals: a beam's by the second it's on a target, the rest's by the round and how they come.
+const delivery = (w: WeaponSpec): Spec[] =>
+  w.kind === 'beam'
+    ? [['Damage', `${Math.round(w.damage * w.fireRate)} a second`]]
+    : [
+        ['Damage', `${w.damage} per ${pelletsOf(w) > 1 ? 'pellet' : ROUND[w.kind][0]}`],
+        ['Rate of fire', `${Math.round(w.fireRate * 60)} rpm`],
+        ['Magazine', `${w.magazine} ${ROUND[w.kind][1]}`],
+        ['Reload', `${w.reloadTime.toFixed(1)} s`],
+      ]
+
+// A mine goes nowhere: it has no range.
 const weaponSpecs = (w: WeaponSpec): Spec[] => [
-  ['Damage', `${w.damage} per ${ROUND[w.kind][0]}`],
-  ['Rate of fire', `${Math.round(w.fireRate * 60)} rpm`],
-  ['Magazine', `${w.magazine} ${ROUND[w.kind][1]}`],
-  ['Reload', `${w.reloadTime.toFixed(1)} s`],
-  ['Range', `${w.range} m`],
+  ...delivery(w),
+  ...(w.kind === 'mine' ? [] : [['Range', `${w.range} m`] satisfies Spec]),
   ...kindSpecs(w),
   ['Firepower', `${Math.round(sustainedDps(w))} dmg/s`], // over whole magazines, reloads included
 ]
@@ -103,7 +142,7 @@ function Turntable({ loadout }: { loadout: Loadout }) {
   return <div ref={containerRef} className="fixed inset-0" />
 }
 
-export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
+export function Garage({ loadout, onLoadout, onBack }: GarageProps) {
   const [selected, setSelected] = useState(0)
   const showLoadout = NAV_ITEMS[selected].label === 'Loadout'
   const vehicle = VEHICLES[loadout.vehicle]
@@ -122,15 +161,13 @@ export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
       if (e.key === 'ArrowRight') pages?.(1)
       if (e.key === 'Enter') {
         e.preventDefault() // no second press through a focused button
-        ;(NAV_ITEMS[selected].label === 'Back' ? onBack : onSelect)()
+        if (NAV_ITEMS[selected].label === 'Back') onBack() // on Vehicle or Loadout it stays: the garage only picks
       }
       if (e.key === 'Escape') onBack()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   })
-
-  const select = <ActionButton primary title="Select" line="Take it to the arena" onClick={onSelect} className="pointer-events-auto mt-6 w-full" />
 
   return (
     <div
@@ -166,7 +203,6 @@ export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
           </div>
           <SpecSheet specs={weaponSpecs(weapon)} />
           <p className="mt-6 text-right font-display text-sm text-neutral-300 italic">{weapon.blurb}</p>
-          {select}
         </div>
       ) : (
         <div className="pointer-events-none absolute top-8 right-[4vw] w-80 text-right">
@@ -182,7 +218,6 @@ export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
           )}
           <SpecSheet specs={vehicleSpecs(vehicle)} />
           <p className="mt-6 text-right font-display text-sm text-neutral-300 italic">{vehicle.blurb}</p>
-          {select}
         </div>
       )}
 
@@ -195,8 +230,6 @@ export function Garage({ loadout, onLoadout, onBack, onSelect }: GarageProps) {
             <span>{showLoadout ? 'Weapon' : 'Vehicle'}</span>
           </>
         )}
-        <span className={keycap}>Enter</span>
-        <span>Select</span>
         <span className={keycap}>Esc</span>
         <span>Back</span>
       </div>

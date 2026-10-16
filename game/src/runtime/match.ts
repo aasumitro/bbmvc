@@ -74,6 +74,7 @@ export function playMatch(parts: MatchParts, source: MatchSource) {
 
   const state = {
     arena,
+    world, // the physics world (the dev build's window.match: the balance probes change a machine's vehicle in it)
     mode, // the running mode: its rules, timing and hooks (sim/matchMode.ts); `kind` for mode-specific screens
     combatants,
     player,

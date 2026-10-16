@@ -60,6 +60,7 @@ equal what the server's arena test prints for that map:
 |---|---|
 | Scrapyard | `227c4ce7` |
 | The City | `8913ad26` |
+| The Docks | `0f3a67c2` |
 
 To print them yourself:
 
@@ -153,7 +154,7 @@ needs Nakama and the game server up.
 node scripts/match-smoke.mjs
 ```
 
-It prints `ok  scrapyard: seated in room …, arena 227c4ce7 as expected, build …`, the same for `city`, and `ok  cleanup: the guest deleted`.
+It prints `ok  scrapyard: seated in room …, arena 227c4ce7 as expected, build …`, the same for `city` and `docks`, and `ok  cleanup: the guest deleted`.
 
 ## 8. Deploy config
 

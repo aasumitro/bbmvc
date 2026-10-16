@@ -127,3 +127,19 @@ export function buildTurret(cradle: THREE.Group) {
   turret.add(gun)
   return turret
 }
+
+// A mine as it lies on the ground: a squat steel drum, a pressure cap, four
+// prongs and a light on top (named 'light': the view blinks it once armed).
+export function buildMine() {
+  const mine = new THREE.Group()
+  mine.add(part(new THREE.CylinderGeometry(0.3, 0.34, 0.1, 20), materials.darkSteel(), [0, 0.05, 0]))
+  mine.add(part(new THREE.CylinderGeometry(0.13, 0.15, 0.06, 16), materials.olive(), [0, 0.13, 0]))
+  for (let i = 0; i < 4; i++) {
+    const angle = (i / 4) * Math.PI * 2 + Math.PI / 4
+    mine.add(part(new THREE.CylinderGeometry(0.012, 0.016, 0.1, 6), materials.steel(), [Math.sin(angle) * 0.2, 0.14, Math.cos(angle) * 0.2]))
+  }
+  const light = part(new THREE.SphereGeometry(0.035, 10, 8), materials.light('#ff3b2f', 6), [0, 0.18, 0])
+  light.name = 'light'
+  mine.add(light)
+  return mine
+}

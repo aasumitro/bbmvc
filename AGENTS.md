@@ -6,7 +6,7 @@
 
 **Scrapyard** — browser-based multiplayer 3D vehicular-combat game. Long-term vision: arcade vehicles, guns/missiles/rockets/mines, destructible vehicles, ramps/buildings/hazards, pickups, AI opponents, 4-8+ online players.
 
-**Current scope is a vertical slice only.** MVP target: 1 procedural arena, 2 procedural vehicles, arcade movement + physics/collision, 1 machine gun, 1 rocket weapon, hit detection, HP/damage/destruction/respawn, basic HUD, online matches (Classic or Custom lobbies) on the game server (players signed in through Nakama), chat in those matches (Nakama's realtime chat: everyone, team, whispers). Two browser windows join the same match, drive, shoot, damage/destroy each other, respawn.
+**Current scope is a vertical slice only.** MVP target: 1 procedural arena, 2 procedural vehicles, arcade movement + physics/collision, 1 machine gun, 1 rocket weapon, hit detection, HP/damage/destruction/respawn, basic HUD, online matches (Classic or Custom lobbies) on the game server (players signed in through Nakama), chat in those matches (Nakama's realtime chat: everyone, team, whispers). Two browser windows join the same match, drive, shoot, damage/destroy each other, respawn. The content phase (`.claude/work/content/`) took the slice past that target on the owner's choices: three arenas, five vehicles, seven guns.
 
 Do NOT build payments, stores, inventory, progression, subscriptions, admin systems, or other business/backend features in this phase. Accounts stop at Nakama sign-in: register, log in, log out, guests (device auth, deleted 3 days after they're made), username and display name, password change, account delete (`www/`). Online matches are kept on the game server for fair-play review (a record per match, a replay per room, `MATCH_DIR`); sending them to Nakama (match history, leaderboards) waits for the next phase. Nakama is the control plane, never the gameplay: `.claude/work/nakama-mm/PLAN.md`.
 
@@ -74,6 +74,6 @@ Both use Tailwind v4 (4.3), configured in CSS. Read `.claude/codes/tw/` before w
 
 ## Development order (do not implement all at once)
 
-React app -> Three.js scene -> procedural arena -> procedural vehicle -> Rapier physics -> vehicle movement -> third-person camera -> weapons -> combat -> HP/destruction/respawn -> Nakama connection -> two-player match -> authoritative multiplayer -> prediction/reconciliation -> interpolation -> polish. (Done up to interpolation and lag compensation: `.claude/work/net/NET_LOG.md`.)
+React app -> Three.js scene -> procedural arena -> procedural vehicle -> Rapier physics -> vehicle movement -> third-person camera -> weapons -> combat -> HP/destruction/respawn -> Nakama connection -> two-player match -> authoritative multiplayer -> prediction/reconciliation -> interpolation -> polish. (Done up to interpolation and lag compensation: `.claude/work/net/NET_LOG.md`; then the content phase: `.claude/work/content/`.)
 
 <!-- END:global-rules -->

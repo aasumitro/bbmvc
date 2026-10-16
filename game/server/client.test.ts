@@ -25,7 +25,6 @@ import { arenaData } from './arenas.ts'
 import { mintToken } from './auth.ts'
 import { browser, page, play as run, until as waitUntil, type Browser } from './browser.ts'
 import { createGameServer } from './server.ts'
-import { addHauler, HAULER } from './testVehicle.ts'
 
 await initPhysics()
 const arena = arenaData('scrapyard')
@@ -384,8 +383,7 @@ check(x.client.net.lost !== '' && y.client.net.lost !== '', `a closed server is 
     'a lobby made: the store is in its waiting room once the server says so',
   )
   const made = view()!
-  const removeHauler = addHauler() // m1 comes in the second vehicle (testVehicle.ts)
-  const m1 = await member('c-m1', HAULER)
+  const m1 = await member('c-m1', 'brute') // in the other vehicle
   m1.send({ t: 'lb', do: 'code', code: made.code })
   await until(() => view()?.slots[2]?.kind === 'person', 1000, 'a member by code')
   const owner = view()!.slots[0]
@@ -401,7 +399,7 @@ check(x.client.net.lost !== '' && y.client.net.lost !== '', `a closed server is 
   await until(() => !!view()?.playing, 1000, 'the lobby’s word beside the match')
   check(first.link.welcome.lobby === made.id && sockets.length === 1, 'the lobby’s word is passed aside while the match has the socket')
   check(
-    roomOf(made.id).combatants[2].vehicle === HAULER && first.link.welcome.lineUp[2].vehicle === HAULER && first.link.welcome.lineUp[0].vehicle === 'razor',
+    roomOf(made.id).combatants[2].vehicle === 'brute' && first.link.welcome.lineUp[2].vehicle === 'brute' && first.link.welcome.lineUp[0].vehicle === 'razor',
     'a lobby’s match seats each person in the vehicle they came with, and every page is told so',
   )
   leaveMatch()
@@ -483,7 +481,6 @@ check(x.client.net.lost !== '' && y.client.net.lost !== '', `a closed server is 
   check(sockets.at(-1)!.readyState === WebSocket.CLOSED, 'leaving the Custom entry closes its socket')
   m1.socket.close()
   await party.close()
-  removeHauler()
 }
 
 describe('client', () => {

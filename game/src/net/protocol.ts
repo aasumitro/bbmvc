@@ -4,6 +4,7 @@ import type { MatchSettings } from '../modes/matchSettings.ts'
 import { createStats, type Stats } from '../sim/scoring.ts'
 import type { Combatant } from '../sim/simulation.ts'
 import type { VehicleId } from '../content/vehicles/vehicles.ts'
+import { MAX_SEATS } from '../modes/traits.ts'
 import { LIMITS, optional, text } from './limits.ts'
 import { lobbying, type Lobbying, type LobbyMessage } from './lobbyProtocol.ts'
 
@@ -17,7 +18,7 @@ import { lobbying, type Lobbying, type LobbyMessage } from './lobbyProtocol.ts'
 // The snapshot alone goes as a binary frame (packSnapshot): it is most of
 // what a page is sent.
 
-export const PROTOCOL = 7 // bumped whenever a message changes shape: an old page is told to reload
+export const PROTOCOL = 9 // bumped whenever a message changes shape: an old page is told to reload
 // The build a page or a server was made from (build-id.ts, put in by Vite as
 // __BUILD__): the server lets in only pages of its own build, so a tab left
 // open across a deploy is told to reload even when no message changed shape
@@ -55,6 +56,7 @@ export interface Input {
   fire: boolean
   recover: boolean
   aim: { x: number; y: number; z: number } // metres, world
+  lock: number // the seat a missile is to lock on, -1 none (the simulation decides whether it holds)
   view: number // the server tick the player sees on screen
 }
 
@@ -106,6 +108,7 @@ export interface Welcome {
   digest: string // the server's arena (content/arenas/digest.ts): the page's must match
   lineUp: SeatInfo[]
   chat: ChatChannels
+  mines: WireEvent[] // the mines down as the player joins, as their 'ml' events
   lobby?: string // a custom lobby's match: the lobby's id
 }
 
@@ -264,7 +267,7 @@ export const blankCar = (): CarState => ({
 
 // What only the player's own client gets of its machine, for its HUD and
 // its prediction: [spin mrad/s ×3, steer ×10⁴, upended ms, ammo, reload ms,
-// cooldown ms, stuck ms, recovery ms].
+// cooldown ms, stuck ms, recovery ms, lock target (-1 none), lock held ms].
 export function meRow(c: Combatant): number[] {
   const w = c.car.body.angvel()
   const ms = (seconds: number) => Math.round(seconds * 1000)
@@ -279,6 +282,8 @@ export function meRow(c: Combatant): number[] {
     ms(c.weapon.cooldown),
     ms(c.stuck),
     ms(c.recovery),
+    c.weapon.lock.target,
+    ms(c.weapon.lock.time),
   ]
 }
 
@@ -291,9 +296,10 @@ export interface MeState {
   cooldown: number
   stuck: number
   recovery: number
+  lock: { target: number; time: number } // a missile's, as the server holds it
 }
 
-export function readMe([wx, wy, wz, steer, upended, ammo, reload, cooldown, stuck, recovery]: readonly number[]): MeState {
+export function readMe([wx, wy, wz, steer, upended, ammo, reload, cooldown, stuck, recovery, lockTarget = -1, lockTime = 0]: readonly number[]): MeState {
   return {
     spin: { x: wx / 1000, y: wy / 1000, z: wz / 1000 },
     steer: steer / 1e4,
@@ -303,6 +309,7 @@ export function readMe([wx, wy, wz, steer, upended, ammo, reload, cooldown, stuc
     cooldown: cooldown / 1000,
     stuck: stuck / 1000,
     recovery: recovery / 1000,
+    lock: { target: lockTarget, time: lockTime / 1000 },
   }
 }
 
@@ -326,7 +333,7 @@ export function readStats(row: readonly number[], out: Stats) {
 export const SNAPSHOT = 1
 const HEAD_BYTES = 14
 const CAR_BYTES = 44 // id u8, position i32×3, rotation i16×4, velocity i16×3, hull i16, flags u8, aim i32×3, throttle i8, steer i8
-const ME_BYTES = 40 // meRow: i32×10
+const ME_BYTES = 48 // meRow: i32×12
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const NONE = new Uint8Array(0)
@@ -428,10 +435,10 @@ export const wireSize = (data: string | Uint8Array) => (typeof data === 'string'
 // One step's controls as the client sends them.
 export function inputMessage(
   seq: number,
-  control: { throttle: number; steer: number; handbrake: boolean; fire: boolean; recover: boolean; aim: { x: number; y: number; z: number } },
+  control: { throttle: number; steer: number; handbrake: boolean; fire: boolean; recover: boolean; aim: { x: number; y: number; z: number }; lock?: number },
   view: number,
 ) {
-  const { throttle, steer, handbrake, fire, recover, aim } = control
+  const { throttle, steer, handbrake, fire, recover, aim, lock = -1 } = control
   return JSON.stringify({
     t: 'in',
     s: seq,
@@ -441,6 +448,7 @@ export function inputMessage(
     f: +fire,
     r: +recover,
     a: [cm(aim.x), cm(aim.y), cm(aim.z)],
+    lk: lock,
     w: view,
   })
 }
@@ -471,10 +479,11 @@ export function parseClient(raw: string, bytes = raw.length): Parsed {
   switch (m.t) {
     case 'in': {
       if (bytes > LIMITS.input) return refuse('input too large')
-      const { s, th, st, a, w } = m
+      const { s, th, st, a, w, lk = -1 } = m
       if (!finite(s) || !Number.isSafeInteger(s) || s < 0) return refuse('bad seq')
       if (!finite(th) || !finite(st) || !finite(w)) return refuse('bad number')
       if (!Array.isArray(a) || a.length !== 3 || !a.every(finite)) return refuse('bad aim')
+      if (!finite(lk) || !Number.isInteger(lk) || lk < -1 || lk >= MAX_SEATS) return refuse('bad lock')
       const reach = 1e6 // cm: anything past this is nonsense; the room clamps to the gun's range
       return {
         ok: true,
@@ -487,6 +496,7 @@ export function parseClient(raw: string, bytes = raw.length): Parsed {
           fire: !!m.f,
           recover: !!m.r,
           aim: { x: clamp(a[0], -reach, reach) / 100, y: clamp(a[1], -reach, reach) / 100, z: clamp(a[2], -reach, reach) / 100 },
+          lock: lk,
           view: Math.max(0, Math.round(w)),
         },
       }

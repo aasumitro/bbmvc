@@ -10,7 +10,7 @@ changed).
 
 ```
 App.tsx ─ screens (React) ─────────────────────────────────────────────────┐
-  loading → menu → garage (Loadout) → map select (Mode, MapId) → game      │ React: screens, menus, HUD markup
+  loading → menu (⇄ garage: Loadout) → map select (Mode, MapId) → game     │ React: screens, menus, HUD markup
                                                                            │
 screens/GameCanvas.tsx ── startGame() ── runtime/runtime.ts                │ one browser session: scene, sun, sky,
                                             │                              │ arena (session cache), composer, loop
@@ -41,7 +41,9 @@ start the WebGL renderer, load the menu's backdrop and fonts) through
 the menu when the last one finishes; a failure shows what failed, with
 Retry. Menus, garage and map select are plain React. The garage shows the
 car on the turntable (`view/turntable.ts`, mounted by a small component in
-`Garage.tsx`), built when the garage opens.
+`Garage.tsx`), built when the garage opens. It only picks the vehicle and
+the gun, each kept as it changes (`runtime/stored.ts`): Back returns to the
+menu, whose Play goes on to the map select.
 
 ## How a match starts
 
@@ -89,8 +91,12 @@ Details: [STATE_OWNERSHIP.md](STATE_OWNERSHIP.md).
   each step by its control source: the pilot for the player, the brain
   (`sim/ai/`, run by the simulation) for a bot.
 - **SimEvents** — the simulation calls the view at the moment something
-  happens in a step (a round fired, a hit, a wreck, a crash, a respawn).
-  Direct calls through one interface, not a bus; a headless run passes no-ops.
+  happens in a step (a round fired, a hit, a wreck, a crash, a respawn, a
+  mine laid or gone). Direct calls through one interface, not a bus; a
+  headless run passes no-ops. Its implementations: the view, the server's
+  recorder (`server/recorder.ts`, the wire events), the tests' page
+  (`server/browser.ts`), the tests' own stubs, and the probe harness's
+  (`.claude/work/content/probe.test.ts`), which the compiler doesn't see.
 - **Rules events** — each mode's rules queue events; the adapter drains them
   into the feed every step (`MatchMode.report`).
 - **Everything else** is direct calls down the layers: match → simulation →
@@ -209,13 +215,30 @@ From `game/`:
    `sim/simulation.test.ts`; Classic's and the custom rooms' in
    `server/server.test.ts`). Re-pin in a commit of its own that gives the
    reason and shows the old hashes still come out without the new entry.
-5. `npm test`: the arena tests put its collision shells on every start of
-   every map; the two-vehicle tests run on a test-only second vehicle
-   (`server/testVehicle.ts`: a takeover mid-match, a custom room of mixed
-   vehicles replayed to the bit, netplay), which a real one can replace.
+5. `npm test`: the model test builds it headless
+   (`content/vehicles/models.test.ts`: the nodes the view drives, each wheel
+   on its hub, the gun's trunnion at the spec's mount on every turret); the
+   arena tests put its collision shells on every start of every map; the
+   two-vehicle tests run on the Razor and the Brute (a takeover mid-match,
+   a custom room of mixed vehicles replayed to the bit, netplay).
    Then the balance probes, then the site's copy (root `AGENTS.md`).
-   A new *mechanic* (tracks, a jump) is a new capability in
-   `sim/drive.ts`/`sim/simulation.ts`, not a copy.
+   The content phase built each one unregistered first (its spec outside
+   `ROSTER`, its builder tested on its own), tuned it with the row put in
+   the registries in the working tree only, and registered it in a commit
+   that re-pins.
+6. A new *mechanic* is a new capability in `sim/drive.ts` or
+   `sim/simulation.ts`, not a copy. The ram (the Rammer) shows the shape:
+   an optional field on `VehicleSpec` (`ram`: hull points per m/s of
+   closing speed, and the arc round the nose); the simulation's check
+   after the physics step (`strike`: the machines its body touched, from
+   Rapier's contact pairs, taken in seat order; the closing speed from the
+   step's starting velocities; a floor, and a wait before the same pair
+   again); the damage through `damage()`, so the rules say who is hurt and
+   a wreck is a kill in the score and the feed; a garage row; and the bots'
+   use of it (`think`: a machine with a ram charges its target; `Agent`
+   carries its `vehicle`). Machines without the field skip the check, so
+   nothing they do changes until a vehicle that has it is registered. It
+   needed no wire change: a hit is a hit (`hu`, the hull).
 
 **A map**
 1. `content/arenas/<name>.ts`: a builder returning the `Arena` contract (spawns;
@@ -242,28 +265,65 @@ From `game/`:
 
 **A weapon**
 1. `content/weapons/weapons.ts`: its id in `WeaponId` and a `WEAPONS` row
-   (`WeaponSpec`: its `kind`, `gun` or `rocket` (a rocket's speed and blast);
-   damage, rate, magazine, reload, range, spread).
+   (`WeaponSpec` by its `kind`: `gun`, hitscan, `pellets` rays a shot;
+   `rocket`, a projectile (speed, blast); `beam`, hitscan pulses while the
+   trigger is held, heat in place of a magazine; `missile`, a rocket that
+   turns after a target held in its window first (speed, blast, turn,
+   lock); `mine`, laid behind the machine (arm, trigger, blast, down,
+   life); then damage, rate, magazine, reload, range, spread). What
+   depends on the kind's own numbers has one reader each in the same file:
+   `pelletsOf`, `blastOf`, `sustainedDps`.
 2. Its `turret`: an existing `TurretKey`, or a new one with its builder in
    `content/weapons/turrets/<name>.ts` and a `TURRETS` entry
    (`content/weapons/turrets.ts`); the compiler holds keys and builders
-   equal.
-3. The garage lists it automatically; the HUD shows `spec.name` and ammo;
+   equal, and the turret test (`content/weapons/turrets.test.ts`) builds
+   each headless with its `gun`.
+3. Its sound: a `GUN_SOUNDS` row in `view/view.ts`, which the compiler asks
+   for by `WeaponId` (the cue each round plays, whether barrels spin while
+   the trigger is held, how hard the player's own shot kicks the camera). A
+   cue of its own is a recipe in `view/sounds.ts` and a `CUES` line in
+   `view/audio.ts`.
+4. The garage lists it automatically; the HUD shows `spec.name` and ammo;
    its id goes on the wire, into the match record and the replay, and a
    lobby may make it the match's one gun. Bots draw it (`armBot` over
-   `WEAPON_IDS`), so the pins move as for a vehicle: re-pin in a commit of
-   its own.
-4. A new firing behaviour (mines, homing) is a new `kind` in the
-   `WeaponSpec` union. Every place that behaves by kind is a switch or a
-   `Record<WeaponKind, …>`, so the compiler lists them: the simulation's
-   `fire` and the recorder's `fired` (`satisfies never`), the bots'
-   `TACTICS` and `flightTime` (`sim/ai/think.ts`) and `blastRadius`
-   (`sim/ai/perception.ts`), the view's `FIRE_CUE` and `SPINS`, the
-   garage's `ROUND` and `kindSpecs`. The compiler can't list the rest:
-   what the kind leaves in the world (a rocket's flight, a mine) in the
-   simulation's state and step, its wire event (`net/events.ts`) and the
-   recorder's line, the view's effects, and how the bots use it beyond
-   the tables.
+   `WEAPON_IDS`), so the pins move as for a vehicle: build it unregistered,
+   tune it with the row in the working tree only, register it in a commit
+   that re-pins.
+5. A new firing behaviour is a new `kind` in the `WeaponSpec` union. Every
+   place that behaves by kind is a switch or a `Record<WeaponKind, …>`, so
+   the compiler lists them: the simulation's `fire` and the recorder's
+   `fired` (`satisfies never`), the bots' `TACTICS` and `flightTime`
+   (`sim/ai/think.ts`), `blastOf`, the garage's `ROUND` and `kindSpecs`;
+   and a new `SimEvents` method, every implementation but the probe
+   harness's (add it there by hand: a missing one throws inside the probe's
+   step, and the probe stalls). What the compiler can't list, by what the
+   content phase's kinds needed:
+   - several rays a shot (the Shotgun's `pellets`): one damage a machine a
+     shot, its pellets summed; the page plays the gun once a shot.
+   - a trigger of its own (the Laser's heat): `pullTrigger`
+     (`sim/combat.ts`), the HUD's weapon panel, the view's effects.
+   - aim the server has to check (the missiles' lock): weapon state
+     (`WeaponState.lock`), a control the pilot and the bots set
+     (`Control.lock`), the simulation's check each step (`holdLock`); an
+     input field and the player's own row on the wire, so `PROTOCOL` goes
+     up and the fixtures move; the replay's `in` row; the fair-play tally.
+   - something left in the world (the Mines): the simulation's own state
+     and step (`lay`, `tendMines`, cleared on a restart), `SimEvents` for
+     it (`laid`, `gone`), wire events (`ml`, `mg`: held for the drawing
+     like the others but played in a catch-up too, since they change what
+     is there), the welcome's list for a page that joins while they lie
+     (`PROTOCOL` up), the view's models.
+   - the bots: when to fire (a missile only once locked; a mine when a
+     rival is on its tail or about to cross the spot behind it), how to
+     fight (`TACTICS`; the mine-layer cuts across its target's bow), what
+     to steer clear of (routes round the hostile mines it knows of,
+     `routesTo` and `AI.berth`).
+   The tests they added: the kind's mechanics on the test yard
+   (`sim/simulation.test.ts`, a stand-in spec while it's unregistered), the
+   wire's (`net/protocol.test.ts`, `net/events.test.ts`), over the socket
+   (`server/server.test.ts`), the turret (`content/weapons/turrets.test.ts`).
+   `server/events.test.ts` holds the codec to the page's old positional
+   reads, so it compares only the codes those knew.
 
 **A loadout slot** (e.g. a Super weapon)
 1. `sim/loadout.ts`: a field (`super: WeaponId`), and its line in

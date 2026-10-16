@@ -10,6 +10,7 @@ import { MODES } from '../modes/modes.ts'
 import { MAX_SEATS } from '../modes/traits.ts'
 import { MODE_VIEWS } from '../modes/views.ts'
 import { settings } from '../view/settings.ts'
+import { locked } from '../sim/combat.ts'
 import type { Combatant } from '../sim/simulation.ts'
 import { fade, label, setStyle, setText, type HudPanelHandle } from './dom.ts'
 import { createMinimap, type MapMarks } from './minimap.ts'
@@ -304,6 +305,7 @@ export const Hud = memo(function Hud({ mode, ref }: { mode: Mode; ref: Ref<HudHa
         <div
           data-hud="weapon"
           data-reloading="off"
+          data-locked="off"
           className="group relative flex h-[clamp(84px,7.6vw,118px)] w-[clamp(112px,10vw,152px)] flex-col items-center justify-center gap-1.5 border-2 border-red-500/90 bg-black/40 shadow-[inset_0_0_26px_rgba(239,68,68,0.28)]"
         >
           <svg viewBox="0 0 64 28" className="w-3/5 fill-current transition-opacity group-data-[reloading=on]:opacity-30">
@@ -313,12 +315,17 @@ export const Hud = memo(function Hud({ mode, ref }: { mode: Mode; ref: Ref<HudHa
             <span data-hud="ammo" className="text-[clamp(16px,1.3vw,22px)]">
               60
             </span>
-            <span className="text-xs text-white/60">
-              {' / '}
-              <span data-hud="magazine">60</span>
+            <span data-hud="magazine" className="text-xs text-white/60">
+              {' / 60'}
             </span>
           </p>
-          <span className="absolute top-1 text-[0.55rem] font-bold tracking-[0.3em] text-red-400 opacity-0 group-data-[reloading=on]:opacity-100">RELOAD</span>
+          <span
+            data-hud="reloadLabel"
+            className="absolute top-1 text-[0.55rem] font-bold tracking-[0.3em] text-red-400 opacity-0 group-data-[reloading=on]:opacity-100"
+          >
+            RELOAD
+          </span>
+          <span className="absolute top-1 text-[0.55rem] font-bold tracking-[0.3em] text-amber-300 opacity-0 group-data-[locked=on]:opacity-100">LOCKED</span>
           <div className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
             <div data-hud="reload" className="h-full w-0 bg-red-500" />
           </div>
@@ -458,6 +465,7 @@ function collect(root: HTMLDivElement) {
     ammo: one('ammo'),
     magazine: one('magazine'),
     reload: one('reload'),
+    reloadLabel: one('reloadLabel'),
     weaponName: one('weaponName'),
     scores: one('scores'),
     scoresMode: one('scoresMode'),
@@ -619,10 +627,23 @@ function createView(getRoot: () => HTMLDivElement | null, getPanel: () => HudPan
       const { weapon } = player
       setText(el.weaponName, `${weapon.spec.name} · LMB`)
       if (el.weaponIcon.getAttribute('d') !== weapon.spec.icon) el.weaponIcon.setAttribute('d', weapon.spec.icon)
-      setText(el.ammo, String(weapon.ammo))
-      setText(el.magazine, String(weapon.spec.magazine))
       el.weapon.dataset.reloading = weapon.reload > 0 ? 'on' : 'off'
-      setStyle(el.reload, 'width', weapon.reload > 0 ? `${(1 - weapon.reload / weapon.spec.reloadTime) * 100}%` : '0%')
+      if (weapon.spec.kind === 'beam') {
+        // a beam's heat: its ammo is what's left to spend, overheated it cools whole
+        const heat = weapon.reload > 0 ? weapon.reload / weapon.spec.reloadTime : 1 - weapon.ammo / weapon.spec.magazine
+        setText(el.ammo, `${Math.round(heat * 100)}%`)
+        setText(el.magazine, ' HEAT')
+        setText(el.reloadLabel, 'OVERHEAT')
+        setStyle(el.reload, 'width', `${heat * 100}%`)
+      } else {
+        setText(el.ammo, String(weapon.ammo))
+        setText(el.magazine, ` / ${weapon.spec.magazine}`)
+        setText(el.reloadLabel, 'RELOAD')
+        // a missile's bar, between reloads, fills as the lock takes hold
+        const lock = weapon.spec.kind === 'missile' ? weapon.lock.time / weapon.spec.missile.lock : 0
+        setStyle(el.reload, 'width', `${(weapon.reload > 0 ? 1 - weapon.reload / weapon.spec.reloadTime : lock) * 100}%`)
+      }
+      el.weapon.dataset.locked = locked(weapon) && weapon.reload <= 0 ? 'on' : 'off'
 
       // crosshair: locks red onto a hostile, with its range
       el.crosshair.dataset.target = match.aim.target ? 'on' : 'off'

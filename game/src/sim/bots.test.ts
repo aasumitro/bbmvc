@@ -102,7 +102,20 @@ function playYard(seed: number, seconds: number, difficulty: Difficulty) {
     combatants,
     mode,
     seed,
-    events: { fired: noop, shot: noop, rocket: noop, burst: noop, hurt: noop, wrecked: noop, crashed: noop, reloading: noop, respawned: noop, recovered: noop },
+    events: {
+      fired: noop,
+      shot: noop,
+      rocket: noop,
+      burst: noop,
+      hurt: noop,
+      wrecked: noop,
+      crashed: noop,
+      reloading: noop,
+      respawned: noop,
+      recovered: noop,
+      laid: noop,
+      gone: noop,
+    },
   })
   const n = { alive: 0, stuck: 0, stuckLong: 0, parked: 0, reverses: 0, distance: 0, engaged: 0, cover: 0, lurking: 0, ambushes: 0, surprise: 0 }
   const wasLurking = combatants.map(() => false)
