@@ -16,8 +16,8 @@ import { join } from 'node:path'
 import * as THREE from 'three'
 import { WebSocket as WsClient } from 'ws'
 import { arenaDigest } from '../src/content/arenas/digest.ts'
-import { armWeapon } from '../src/sim/combat.ts'
-import { WEAPONS } from '../src/content/weapons/weapons.ts'
+import { armWeapon, locked } from '../src/sim/combat.ts'
+import { WEAPONS, type MineSpec } from '../src/content/weapons/weapons.ts'
 import { MAPS, type MapId } from '../src/content/arenas/maps.ts'
 import { classic, type MatchSettings } from '../src/modes/matchSettings.ts'
 import { MODES } from '../src/modes/modes.ts'
@@ -35,6 +35,7 @@ import {
   parseClient,
   PROTOCOL,
   readCar,
+  readMe,
   readServer,
   STAT_KEYS,
   weaponId,
@@ -50,7 +51,6 @@ import { createRecords } from './records.ts'
 import { replay, replayLines } from './replay.ts'
 import { createRoom, SKILL, type Human, type MatchRecord, type Room } from './room.ts'
 import { createGameServer } from './server.ts'
-import { addHauler, HAULER } from './testVehicle.ts'
 
 await initPhysics()
 for (const id of Object.keys(MAPS) as MapId[]) arenaData(id)
@@ -65,6 +65,9 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 // server's loop falls behind (it drops what it can't catch up) and the wall
 // clock doesn't.
 const inSteps = (ms: number) => Math.round(ms / 1000 / PHYSICS_STEP)
+// The days of replays a room dated `created` keeps (records.ts prunes them by
+// the real clock): 14 back from that day, whenever the test runs.
+const keptDays = (created: number) => 14 + Math.ceil((Date.now() - created) / 86_400_000)
 async function until(done: () => boolean, ms: number, what: string) {
   const end = performance.now() + ms
   while (!done()) {
@@ -116,7 +119,15 @@ function probe(origin = ORIGIN, at = port) {
     // One step of controls, numbered in order.
     next: () => ++seq, // a seq after every one sent so far
     input: (
-      control: Partial<{ throttle: number; steer: number; handbrake: boolean; fire: boolean; recover: boolean; aim: { x: number; y: number; z: number } }> = {},
+      control: Partial<{
+        throttle: number
+        steer: number
+        handbrake: boolean
+        fire: boolean
+        recover: boolean
+        aim: { x: number; y: number; z: number }
+        lock: number
+      }> = {},
       view = 0,
     ) => p.send(inputMessage(++seq, { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false, aim: { x: 0, y: 1, z: 0 }, ...control }, view)),
     of: <T extends ServerMessage['t']>(t: T) => inbox.filter((m) => m.t === t) as Array<Extract<ServerMessage, { t: T }>>,
@@ -147,6 +158,22 @@ function stream(p: Probe, controls: () => Parameters<Probe['input']>[0]) {
 const roomOf = (p: Probe) => server.seating.rooms.find((r) => r.id === p.last('welcome')?.room)
 const machine = (p: Probe) => roomOf(p)!.combatants[welcomeOf(p).seat]
 const carIn = (s: Snapshot, id: number) => readCar(s.cars.find((row) => row[0] === id)!)
+// Two machines of the first room face to face on an open stretch of road (a
+// link of its nav graph 20–45 m long), every other parked out of the way;
+// what the first aims at to hit the second.
+function faceOff(ca: Combatant, cb: Combatant) {
+  const nav = room.arena.nav
+  const [i, j] = (() => {
+    for (let n = 0; n < nav.nodes.length; n++)
+      for (const m of nav.links[n]) if (nav.nodes[n].distanceTo(nav.nodes[m]) > 20 && nav.nodes[n].distanceTo(nav.nodes[m]) < 45) return [n, m]
+    throw new Error('server: no stretch of road for a duel')
+  })()
+  const heading = (from: number, to: number) => Math.atan2(nav.nodes[to].x - nav.nodes[from].x, nav.nodes[to].z - nav.nodes[from].z)
+  for (const c of room.combatants) if (c !== ca && c !== cb) placeCar(c.car, { x: 400, y: 0, z: 300 - c.id * 12 }, 0)
+  placeCar(ca.car, nav.nodes[i], heading(i, j))
+  placeCar(cb.car, nav.nodes[j], heading(j, i))
+  return { x: nav.nodes[j].x, y: 1.1, z: nav.nodes[j].z }
+}
 const rulesOf = (p: Probe) => p.last('st')?.rules as { phase: string; score: number[] } | undefined // the mirrored rules, as the latest state had them
 
 // A raw upgrade request, to see how the door answers.
@@ -381,17 +408,7 @@ const aim = { x: 0, y: 1, z: 0 }
   check(a.events('sh').filter((e) => e[2] === ca.id).length === shots && !carIn(a.last('s')!, ca.id).fire, 'and no more rounds leave its gun')
 
   // --- combat: a duel on an open stretch of road ---------------------------------------------------
-  const nav = room.arena.nav
-  const [i, j] = (() => {
-    for (let n = 0; n < nav.nodes.length; n++)
-      for (const m of nav.links[n]) if (nav.nodes[n].distanceTo(nav.nodes[m]) > 20 && nav.nodes[n].distanceTo(nav.nodes[m]) < 45) return [n, m]
-    throw new Error('server: no stretch of road for a duel')
-  })()
-  const heading = (from: number, to: number) => Math.atan2(nav.nodes[to].x - nav.nodes[from].x, nav.nodes[to].z - nav.nodes[from].z)
-  for (const c of room.combatants) if (c !== ca && c !== cb) placeCar(c.car, { x: 400, y: 0, z: 300 - c.id * 12 }, 0)
-  placeCar(ca.car, nav.nodes[i], heading(i, j))
-  placeCar(cb.car, nav.nodes[j], heading(j, i))
-  const target = { x: nav.nodes[j].x, y: 1.1, z: nav.nodes[j].z }
+  const target = faceOff(ca, cb)
   stopA = stream(a, () => ({ fire: true, aim: target }))
   await until(() => !cb.alive, 15000, 'the duel to end')
   stopA()
@@ -454,7 +471,7 @@ const aim = { x: 0, y: 1, z: 0 }
   check(human.seq === newest && human.last?.throttle === 0, 'an old or repeated seq is dropped')
 
   // the trigger toggled every message never beats the gun's rate
-  ca.weapon = { spec: WEAPONS.minigun, ammo: 60, cooldown: 0, reload: 0 }
+  ca.weapon = armWeapon(WEAPONS.minigun)
   let on = false
   const count = () => a.events('sh').filter((e) => e[2] === ca.id).length
   const fired = count()
@@ -496,6 +513,77 @@ const aim = { x: 0, y: 1, z: 0 }
   const during = (room.steps.total - ms0) / Math.max(1, room.steps.count - steps0)
   check(flood.last('err')?.code === 'bad-request', 'a flood runs out of tokens, strikes out and is closed')
   check(during < baseline * 3 + 0.5, `the room steps on as before (${baseline.toFixed(3)} ms a step, ${during.toFixed(3)} ms during the flood)`)
+}
+
+// --- a missile's lock ------------------------------------------------------------------------------------
+// The lock rides the input. The room holds it only on a hostile in the
+// window round the aim, and the page hears it in its own row.
+
+{
+  const [ca, cb] = [machine(a), machine(b)]
+  const gun = ca.weapon.spec
+  ca.weapon = armWeapon(WEAPONS.missiles)
+  const target = faceOff(ca, cb)
+  let stop = stream(a, () => ({ aim: target, lock: cb.id }))
+  await until(() => locked(ca.weapon), 3000, 'the lock')
+  await until(() => readMe(a.last('s')!.me).lock.time >= 0.8, 1000, 'the page to hear the lock')
+  check(readMe(a.last('s')!.me).lock.target === cb.id, 'a lock named on a hostile in the window is held, and its page hears it')
+  stop()
+  const mate = room.combatants.find((c) => c !== ca && c.team === ca.team && c.alive)!
+  faceOff(ca, mate)
+  stop = stream(a, () => ({ aim: { x: mate.position.x, y: 1.1, z: mate.position.z }, lock: mate.id }))
+  await wait(1200)
+  stop()
+  check(ca.weapon.lock.target === -1 && readMe(a.last('s')!.me).lock.target === -1, 'a lock named on a teammate in the window never holds')
+  ca.weapon = armWeapon(gun)
+}
+
+// --- a mine ----------------------------------------------------------------------------------------------
+// A mine goes on the wire as it's laid ('ml') and as it's gone ('mg'), its
+// burst as a rocket's; a page that joins while it lies hears of it in its
+// welcome.
+
+{
+  const [ca, cb] = [machine(a), machine(b)]
+  const gun = ca.weapon.spec
+  const layer: MineSpec = {
+    ...WEAPONS.minigun,
+    kind: 'mine',
+    damage: 60,
+    fireRate: 1,
+    magazine: 3,
+    reloadTime: 6,
+    range: 30,
+    spread: 0,
+    mine: { arm: 1, trigger: 4, blast: 6, down: 3, life: 30 },
+  }
+  ca.weapon = armWeapon(layer)
+  faceOff(ca, cb)
+  a.input({ fire: true }, room.tick)
+  await until(() => b.events('ml').some((e) => e[3] === ca.id), 2000, 'the mine on the wire')
+  const [, , id, , x, y, z] = b.events('ml').find((e) => e[3] === ca.id)! as number[]
+  const down = room.sim.mines.find((m) => m.id === id)
+  check(
+    !!down && Math.round(down.position.x * 100) === x && Math.round(down.position.y * 100) === y && Math.round(down.position.z * 100) === z,
+    'a mine laid goes on the wire where it lies',
+  )
+  const late = await player('u-late')
+  check(
+    welcomeOf(late).mines.some((e) => e[0] === 'ml' && e[2] === id && e[3] === ca.id),
+    'a page that joins while it lies hears of it in its welcome',
+  )
+  late.send({ t: 'bye' })
+  await until(() => !room.humans.some((h) => h.uid === 'u-late'), 2000, 'the late page to leave')
+  await wait(1000) // armed
+  const hull = cb.health
+  placeCar(cb.car, { x: x / 100, y: 0, z: z / 100 }, 0)
+  await until(() => b.events('mg').some((e) => e[2] === id), 2000, 'the mine to go off')
+  await until(() => b.events('bu').length > 0 && cb.health < hull, 1000, 'its burst')
+  check(
+    hull - cb.health === 60 && !room.sim.mines.length,
+    `a machine on it sets it off: gone on the wire, its burst heard, 60 to the machine (${hull - cb.health})`,
+  )
+  ca.weapon = armWeapon(gun)
 }
 
 // --- seats ---------------------------------------------------------------------------------------------
@@ -1089,14 +1177,20 @@ for (const [kind, map] of [
 
 // Classic as it played before the custom lobbies (.claude/work/custom/PLAN.md
 // 5.6): a whole match of bots in each mode on each arena, hashed. The
-// refactor leaves them as they are; play changed on purpose changes them here.
+// refactor leaves them as they are; play changed on purpose changes them here
+// (the content phase: bots draw the Brute, 1b, the Cannon, 2b, the Scout, 4b,
+// the Buggy, 4d, the Shotgun, 5b, the Laser, 6b, the Homing Missiles, 7b,
+// the Mines, 8b, and the Rammer, 9b, too; the Docks, 3b, add their two;
+// then the owner's balance: the Mines and bots dodging them, the Rocket Pod).
 {
   const started = performance.now()
   const GOLDEN = [
-    ['tdm', 'scrapyard', 'd9ee9ad8fa7017af'],
-    ['tdm', 'city', '467400f8225aeea3'],
-    ['ffa', 'scrapyard', '3c2735848552d2b4'],
-    ['ffa', 'city', '6c4c3343a80b5f99'],
+    ['tdm', 'scrapyard', '7adc3513051f0c33'],
+    ['tdm', 'city', '5388f4dc1fb7aa50'],
+    ['ffa', 'scrapyard', 'ca5d5572baa961c7'],
+    ['ffa', 'city', '33c774551030df62'],
+    ['tdm', 'docks', '1b3f1007a8688679'],
+    ['ffa', 'docks', '6ff7d495717a622c'],
   ] as const
   const played = GOLDEN.map(([kind, map]) =>
     createHash('sha256')
@@ -1114,10 +1208,14 @@ for (const [kind, map] of [
 
 // A custom lobby's settings, pinned the same way: team deathmatch on the
 // Scrapyard at its biggest, 6 v 6, friendly fire, every pickup group, a kill
-// limit of 25, fast respawns, a 5-minute clock, seat 11 empty from 60 s to
-// 120 s of the room's steps; and free for all on The City at its smallest,
+// limit of 25, fast respawns, a 5-minute clock, seat 11 empty from 30 s to
+// 80 s of the room's steps; and free for all on The City at its smallest,
 // 2 machines, no pickups, normal respawns, a 5-minute clock. The refactor
-// leaves them as they are; play changed on purpose changes them here.
+// leaves them as they are; play changed on purpose changes them here (the
+// content phase: bots draw the Brute, 1b, the Cannon, 2b, the Scout, 4b, the
+// Buggy, 4d, the Shotgun, 5b, the Laser, 6b, the Homing Missiles, 7b, the
+// Mines, 8b, and the Rammer, 9b, too; then the owner's balance: the Mines
+// and bots dodging them, the Rocket Pod).
 {
   const started = performance.now()
   const CUSTOM_PINS: ReadonlyArray<readonly [Mode, MapId, MatchSettings, Away | undefined, string]> = [
@@ -1125,15 +1223,15 @@ for (const [kind, map] of [
       'tdm',
       'scrapyard',
       { ...classic('tdm'), size: 12, duration: 300, respawn: 'fast', friendlyFire: true, items: { health: true, ammo: true, powerups: true }, killLimit: 25 },
-      { seat: 11, from: 60 * 60, to: 120 * 60 },
-      'c6f185549c8774b2',
+      { seat: 11, from: 30 * 60, to: 80 * 60 },
+      'da25c148e6bc6b4f',
     ],
     [
       'ffa',
       'city',
       { ...classic('ffa'), size: 2, duration: 300, respawn: 'normal', items: { health: false, ammo: false, powerups: false } },
       undefined,
-      '5e53e03454103914',
+      '8814d9f16b75b25d',
     ],
   ]
   const played = CUSTOM_PINS.map(([kind, map, settings, away]) => {
@@ -1179,8 +1277,8 @@ for (const [kind, map] of [
 {
   const dir = mkdtempSync(join(tmpdir(), 'scrapyard-records-'))
   mkdirSync(join(dir, 'replays', '2000-01-01'), { recursive: true }) // past any REPLAY_DAYS: pruned
-  const kept = createRecords({ dir, days: 14, log: () => {} })
   const created = Date.UTC(2026, 8, 29, 12)
+  const kept = createRecords({ dir, days: keptDays(created), log: () => {} })
   const file = kept.replay('journal', created)
   const recorded: MatchRecord[] = []
   const r = createRoom({
@@ -1295,8 +1393,8 @@ for (const [kind, map] of [
 // It replays to the bit, seats and all.
 {
   const dir = mkdtempSync(join(tmpdir(), 'scrapyard-custom-'))
-  const kept = createRecords({ dir, days: 14, log: () => {} })
   const created = Date.UTC(2026, 8, 30, 12)
+  const kept = createRecords({ dir, days: keptDays(created), log: () => {} })
   const file = kept.replay('custom', created)
   const recorded: MatchRecord[] = []
   const ended: Array<number | null | undefined> = []
@@ -1451,14 +1549,19 @@ for (const [kind, map] of [
   const quiet = person('quiet')
   const c = r.combatants[late.seat]
   const from = c.position.clone()
-  run(8)
-  const fired = heard.some((m) => m.t === 's' && m.ev.some((e) => (e[0] === 'sh' || e[0] === 'ln') && e[2] === c.id))
+  // the bot on it fights on: a second at a time until it has fired (it needs a target in range), 15 s at most
+  const fired = () => heard.some((m) => m.t === 's' && m.ev.some((e) => (e[0] === 'sh' || e[0] === 'ln') && e[2] === c.id))
+  let waited = 0
+  while (waited < 15 && !(waited >= 8 && fired())) {
+    run(1)
+    waited++
+  }
   const moved = c.position.distanceTo(from)
   check(
-    !!c.brain && moved > 10 && fired && c.name === 'late' && c.weapon.spec.damage < WEAPONS.minigun.damage,
-    `a seat taken mid-match is the bot’s until the page’s first input: 8 s on it has driven ${moved.toFixed(0)} m and fired, under the newcomer’s name, with a bot’s copy of their gun`,
+    !!c.brain && moved > 10 && fired() && c.name === 'late' && c.weapon.spec.damage < WEAPONS.minigun.damage,
+    `a seat taken mid-match is the bot’s until the page’s first input: ${waited} s on it has driven ${moved.toFixed(0)} m and fired, under the newcomer’s name, with a bot’s copy of their gun`,
   )
-  console.log(`handover: a seat taken mid-match, no input for 8 s: the bot drove it ${moved.toFixed(0)} m and fired`)
+  console.log(`handover: a seat taken mid-match, no input for ${waited} s: the bot drove it ${moved.toFixed(0)} m and fired`)
   let seq = 0
   const send = (control: Partial<Parameters<typeof inputMessage>[1]> = {}) => {
     const parsed = parseClient(
@@ -1473,7 +1576,7 @@ for (const [kind, map] of [
     'the first input takes the wheel: the bot lets go, the controls are the person’s, their gun at full rating',
   )
   const keepUp = () => k % 60 === 0 && send()
-  run(50, keepUp)
+  run(58 - waited, keepUp)
   check(!closed.length && !!r.combatants[quiet.seat].brain, 'nobody is let go within the minute; the one who hasn’t sent anything still has a bot at the wheel')
   run(4, keepUp)
   check(closed.includes('quiet idle') && !closed.some((line) => line.startsWith('late')), 'someone who never sends an input is let go a minute after joining')
@@ -1663,17 +1766,14 @@ for (const line of budget) console.log(line)
 
 // --- two vehicles ------------------------------------------------------------------------------------------
 
-// A second vehicle (testVehicle.ts: the hauler, for the tests alone, put in
-// the registry here and taken out at the end, after every pin above): bots
-// draw both; a person takes a bot's seat mid-match in the one they chose, its
-// body replaced where it stands, and leaves it to the bot's own again; a
-// custom room seats each person in theirs from its plan. Both replay to the
-// bit, the swaps included.
+// The Razor and the Brute: bots draw both; a person takes a bot's seat
+// mid-match in the one they chose, its body replaced where it stands, and
+// leaves it to the bot's own again; a custom room seats each person in
+// theirs from its plan. Both replay to the bit, the swaps included.
 {
-  const removeHauler = addHauler()
   const dir = mkdtempSync(join(tmpdir(), 'scrapyard-fleet-'))
-  const kept = createRecords({ dir, days: 14, log: () => {} })
   const created = Date.UTC(2026, 9, 10, 12)
+  const kept = createRecords({ dir, days: keptDays(created), log: () => {} })
   const at = (k: number) => k * 1000 * PHYSICS_STEP
   let seq = 0
   const drive = (r: Room, h: Human) => {
@@ -1706,7 +1806,7 @@ for (const line of budget) console.log(line)
       }
     }
     const drawn = r.combatants.map((c) => c.vehicle)
-    check(drawn.includes(HAULER) && drawn.includes('razor'), `bots draw their vehicles from the registry as it stands: both (${drawn.join(', ')})`)
+    check(drawn.includes('brute') && drawn.includes('razor'), `bots draw their vehicles from the registry as it stands: both (${drawn.join(', ')})`)
     run(60 * 20)
     const heard: ServerMessage[] = []
     r.join(
@@ -1715,8 +1815,10 @@ for (const line of budget) console.log(line)
     )
     const seat = 4 // the next newcomer's: red has fewer people
     const c = r.combatants[seat]
+    // taken over while its bot is whole, so the drive below is the person's, not how long the bot left the hull to live under fire
+    for (let n = 0; n < 60 * 30 && c.health < c.maxHealth; n++) run(1)
     const before = { vehicle: c.vehicle, body: c.car.body, bodies: r.world.bodies.len(), at: c.position.clone(), share: c.health / c.maxHealth }
-    const theirs = before.vehicle === HAULER ? 'razor' : HAULER
+    const theirs = before.vehicle === 'brute' ? 'razor' : 'brute'
     const person = r.join({ uid: 'f-p', name: 'f-p', loadout: { vehicle: theirs, weapon: 'minigun' }, send() {}, close() {} }, at(r.tick))!
     check(
       person.seat === seat && c.vehicle === theirs && c.car.chassis === VEHICLES[theirs].chassis && c.maxHealth === VEHICLES[theirs].armour,
@@ -1735,9 +1837,17 @@ for (const line of budget) console.log(line)
       heard.some((m) => m.t === 'ro' && m.seat === seat && m.human && m.vehicle === theirs),
       'the others hear the seat change hands, in its vehicle',
     )
+    // Its body was put down at rest: whatever speed it picks up is the person's throttle (where it stands decides how far it gets).
     const from = c.position.clone()
-    run(60 * 4, person)
-    check(c.position.distanceTo(from) > 5, `its person drives it (${c.position.distanceTo(from).toFixed(1)} m in 4 s)`)
+    let top = 0
+    for (let n = 0; n < 60 * 4; n++) {
+      run(1, person)
+      top = Math.max(top, c.speed)
+    }
+    check(
+      !c.brain && top > 4,
+      `its person drives it, no bot: up to ${top.toFixed(1)} m/s in 4 s (${c.position.distanceTo(from).toFixed(1)} m from where it was put down)`,
+    )
     r.leave(person, at(r.tick))
     check(
       c.vehicle === before.vehicle && !!c.brain && heard.some((m) => m.t === 'ro' && m.seat === seat && !m.human && m.vehicle === before.vehicle),
@@ -1765,7 +1875,7 @@ for (const line of budget) console.log(line)
     const file = kept.replay('fleet-custom', created)
     const recorded: MatchRecord[] = []
     const ended: Array<number | null | undefined> = []
-    const plan: SeatPlan = [{ uid: 'g-1', vehicle: HAULER }, { skill: 'normal' }, { skill: 'hard' }, { uid: 'g-2', vehicle: 'razor' }, { skill: 'easy' }, null]
+    const plan: SeatPlan = [{ uid: 'g-1', vehicle: 'brute' }, { skill: 'normal' }, { skill: 'hard' }, { uid: 'g-2', vehicle: 'razor' }, { skill: 'easy' }, null]
     const settings = { ...classic('ffa'), size: 6, duration: 180, killLimit: 10 }
     const r = createRoom({
       id: 'fleet-custom',
@@ -1780,10 +1890,10 @@ for (const line of budget) console.log(line)
       record: (m) => (recorded.push(m), kept.match(m)),
     })
     const handles = r.combatants.map((c) => c.car.body.handle)
-    r.join({ uid: 'g-1', name: 'g-1', loadout: { vehicle: HAULER, weapon: 'minigun' }, send() {}, close() {} }, at(r.tick), 0)
+    r.join({ uid: 'g-1', name: 'g-1', loadout: { vehicle: 'brute', weapon: 'minigun' }, send() {}, close() {} }, at(r.tick), 0)
     r.join({ uid: 'g-2', name: 'g-2', loadout: { vehicle: 'razor', weapon: 'rocketPod' }, send() {}, close() {} }, at(r.tick), 3)
     check(
-      r.combatants[0].vehicle === HAULER && r.combatants[3].vehicle === 'razor' && r.combatants.every((c, i) => c.car.body.handle === handles[i]),
+      r.combatants[0].vehicle === 'brute' && r.combatants[3].vehicle === 'razor' && r.combatants.every((c, i) => c.car.body.handle === handles[i]),
       'a custom room seats each person in the vehicle its plan names: built for them, no body replaced as they sit down',
     )
     for (let n = 0; !ended.length; n++) {
@@ -1803,7 +1913,6 @@ for (const line of budget) console.log(line)
   }
   kept.close()
   rmSync(dir, { recursive: true, force: true })
-  removeHauler()
 }
 
 describe('server', () => {

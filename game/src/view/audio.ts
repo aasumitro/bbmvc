@@ -10,6 +10,9 @@ import * as sounds from './sounds.ts'
 export type SoundCue =
   | 'shot'
   | 'launch'
+  | 'cannon'
+  | 'shotgun'
+  | 'zap'
   | 'hitMetal'
   | 'hitGround'
   | 'damage'
@@ -41,6 +44,9 @@ interface CueSpec {
 const CUES: Record<SoundCue, CueSpec> = {
   shot: { make: () => [1, 2, 3, 4].map(sounds.shot), gain: 0.5, reach: 10, limit: 16, pitch: 0.08 },
   launch: { make: () => [1, 2].map(sounds.launch), gain: 0.6, reach: 12, limit: 4, pitch: 0.1 },
+  cannon: { make: () => [1, 2].map(sounds.cannon), gain: 0.7, reach: 14, limit: 6, pitch: 0.06 },
+  shotgun: { make: () => [1, 2].map(sounds.shotgun), gain: 0.65, reach: 12, limit: 6, pitch: 0.06 },
+  zap: { make: () => [1, 2, 3].map(sounds.zap), gain: 0.35, reach: 10, limit: 8, pitch: 0.03 },
   hitMetal: { make: () => [1, 2, 3].map(sounds.metal), gain: 0.45, reach: 8, limit: 10, pitch: 0.1 },
   hitGround: { make: () => [1, 2, 3].map(sounds.ground), gain: 0.35, reach: 8, limit: 10, pitch: 0.12 },
   damage: { make: () => [1, 2].map(sounds.damage), gain: 0.6, limit: 4, pitch: 0.06 },

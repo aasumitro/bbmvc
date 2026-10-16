@@ -134,7 +134,7 @@ check(
 check(JSON.stringify(read.ev) === JSON.stringify(events), 'the events come back whole (JSON after the rows, any text)')
 const quiet = unpackSnapshot(packSnapshot(5, -1, 0, packCars(rows), mine, packEvents([])))
 check(
-  quiet.ev.length === 0 && quiet.ack === -1 && wireSize(packSnapshot(5, -1, 0, packCars(rows), mine, packEvents([]))) === 14 + 2 * 44 + 40,
+  quiet.ev.length === 0 && quiet.ack === -1 && wireSize(packSnapshot(5, -1, 0, packCars(rows), mine, packEvents([]))) === 14 + 2 * 44 + 48,
   'no events: nothing after the rows; an ack of -1 (no input used yet) holds',
 )
 const offset = new Uint8Array(frame.length + 3)
@@ -202,7 +202,7 @@ check(weaponId({ ...WEAPONS.rocketPod, damage: 1 }) === 'rocketPod' && weaponId(
   const hex = Array.from(frame, (b) => b.toString(16).padStart(2, '0')).join('')
   check(
     hex ===
-      '01cd810100e110000040e201000204cbf3ffff71000000211e0000000070170000401fff7fe7fffb046b0305fef7ffffe10000001d2700004be1090019000032000000cecdffff00000000000010270000000000000000080000000000000000000000000000fa00000024faffff7d000000cbf3ffff0000000011000000000000003f000000dc050000000000005b5b226275222c39383736342c3132302c35302c2d3334305d5d',
+      '01cd810100e110000040e201000204cbf3ffff71000000211e0000000070170000401fff7fe7fffb046b0305fef7ffffe10000001d2700004be1090019000032000000cecdffff00000000000010270000000000000000080000000000000000000000000000fa00000024faffff7d000000cbf3ffff0000000011000000000000003f000000dc05000000000000ffffffff000000005b5b226275222c39383736342c3132302c35302c2d3334305d5d',
     `a snapshot frame, byte for byte (${hex})`,
   )
 
@@ -233,11 +233,12 @@ check(weaponId({ ...WEAPONS.rocketPod, damage: 1 }) === 'rocketPod' && weaponId(
       { name: '', team: 1, vehicle: 'razor', weapon: 'rocketPod', human: false, uid: '', present: false },
     ],
     chat: { all: `sy-${'0a'.repeat(12)}`, team: `sy-${'1b'.repeat(12)}` },
+    mines: [['ml', 230, 7, 1, 1234, 5, -678]],
     lobby: 'c0ffee12',
   }
   check(
     JSON.stringify(welcome) ===
-      '{"t":"welcome","v":7,"room":"r7f3a21","seat":0,"mode":"tdm","map":"city","seed":3141592653,"settings":{"size":2,"duration":900,"respawn":"slow","friendlyFire":true,"items":{"health":true,"ammo":false,"powerups":true},"weapons":"rocketPod","killLimit":10},"tick":240,"rate":{"step":60,"snap":30},"digest":"8913ad26","lineUp":[{"name":"Guest 1e6f","team":0,"vehicle":"razor","weapon":"rocketPod","human":true,"uid":"u-1e6f","present":true},{"name":"","team":1,"vehicle":"razor","weapon":"rocketPod","human":false,"uid":"","present":false}],"chat":{"all":"sy-0a0a0a0a0a0a0a0a0a0a0a0a","team":"sy-1b1b1b1b1b1b1b1b1b1b1b1b"},"lobby":"c0ffee12"}',
+      '{"t":"welcome","v":9,"room":"r7f3a21","seat":0,"mode":"tdm","map":"city","seed":3141592653,"settings":{"size":2,"duration":900,"respawn":"slow","friendlyFire":true,"items":{"health":true,"ammo":false,"powerups":true},"weapons":"rocketPod","killLimit":10},"tick":240,"rate":{"step":60,"snap":30},"digest":"8913ad26","lineUp":[{"name":"Guest 1e6f","team":0,"vehicle":"razor","weapon":"rocketPod","human":true,"uid":"u-1e6f","present":true},{"name":"","team":1,"vehicle":"razor","weapon":"rocketPod","human":false,"uid":"","present":false}],"chat":{"all":"sy-0a0a0a0a0a0a0a0a0a0a0a0a","team":"sy-1b1b1b1b1b1b1b1b1b1b1b1b"},"mines":[["ml",230,7,1,1234,5,-678]],"lobby":"c0ffee12"}',
     `a welcome to a custom lobby’s match, as JSON (${JSON.stringify(welcome)})`,
   )
   const ro: ServerMessage = { t: 'ro', seat: 1, name: 'Guest 1e6f', human: true, weapon: 'minigun', vehicle: 'razor', uid: 'u-1e6f', present: true }
@@ -245,8 +246,12 @@ check(weaponId({ ...WEAPONS.rocketPod, damage: 1 }) === 'rocketPod' && weaponId(
     JSON.stringify(ro) === '{"t":"ro","seat":1,"name":"Guest 1e6f","human":true,"weapon":"minigun","vehicle":"razor","uid":"u-1e6f","present":true}',
     `a seat changing hands, as JSON (${JSON.stringify(ro)})`,
   )
-  const typed = inputMessage(77, { throttle: -0.5, steer: 0.25, handbrake: true, fire: false, recover: true, aim: { x: -12.345, y: 1.5, z: 99.999 } }, 4321)
-  check(typed === '{"t":"in","s":77,"th":-50,"st":25,"hb":1,"f":0,"r":1,"a":[-1234,150,10000],"w":4321}', `an input, as JSON (${typed})`)
+  const typed = inputMessage(
+    77,
+    { throttle: -0.5, steer: 0.25, handbrake: true, fire: false, recover: true, aim: { x: -12.345, y: 1.5, z: 99.999 }, lock: 3 },
+    4321,
+  )
+  check(typed === '{"t":"in","s":77,"th":-50,"st":25,"hb":1,"f":0,"r":1,"a":[-1234,150,10000],"lk":3,"w":4321}', `an input, as JSON (${typed})`)
   fixed.free()
 }
 
@@ -284,10 +289,18 @@ check(
 check(parse(raw({ s: -1 })) === null && parse(raw({ s: 1.5 })) === null && parse(raw({ s: 2 ** 60 })) === null, 'a seq must be a whole number ≥ 0')
 const forged = parse(raw({ health: 100, position: [0, 0, 0], damage: 999, kill: 3, ammo: 60, alive: true }))
 check(
-  forged !== null && Object.keys(forged).sort().join() === 'aim,fire,handbrake,recover,seq,steer,t,throttle,view',
+  forged !== null && Object.keys(forged).sort().join() === 'aim,fire,handbrake,lock,recover,seq,steer,t,throttle,view',
   'fields besides the controls are left behind',
 )
 check(parse(raw({ a: [1e9, -1e9, 5e8] }))?.aim.x === 10000, 'a wild aim is pulled in before the room clamps it to range')
+check(
+  parse(raw({}))?.lock === -1 && parse(raw({ lk: 7 }))?.lock === 7 && parse(raw({ lk: -1 }))?.lock === -1,
+  'a lock names a seat, or none (-1, also when left out)',
+)
+check(
+  [12, -2, 1.5, '3', null].every((lk) => parse(raw({ lk })) === null),
+  'a lock that is no seat is refused',
+)
 check(!parseClient(raw({ pad: 'x'.repeat(LIMITS.input) })).ok, 'an input over 1 KB is refused')
 check(!parseClient('{"t":"hello"}', LIMITS.hello + 1).ok, 'anything over 4 KB is refused')
 
@@ -382,7 +395,7 @@ world.free()
     respawn: 'warp',
     friendlyFire: 'yes',
     items: { health: 1 },
-    weapons: 'laser',
+    weapons: 'flamethrower',
     killLimit: 3,
   })
   check(!bad.ok && Object.keys(bad.errors).length === 7, 'every field out of range or of the wrong type named, each once')

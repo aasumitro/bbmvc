@@ -1,8 +1,14 @@
 # Content phase — plan
 
-**Status (2026-10-11): planned, not started.** It starts once `refactor/game`
-is merged into `main`, which is the owner's call. This is the plan only:
-nothing here is built yet.
+**Status (2026-10-16): every step done, 0 to 11** (the Brute, the
+Cannon, the Docks, the Scout, the Buggy, the Shotgun, the Laser, the
+Homing Missiles, the Mines and the Rammer registered; coverage, bundle and
+probes measured again, the docs and the site's copy brought up to date;
+the owner's balance calls made; what was done and measured is in
+`LOG.md`). It waits for the owner's word
+to be squashed into `release/0.13.0` (C5). The work happens on the local
+branch `feat/content`, cut from `release/0.13.0` once the refactor was
+squashed into it (C5).
 
 The refactor (`.claude/work/refactor/`) made the game ready for new content
 without engine edits. This phase adds that content, one piece at a time.
@@ -24,7 +30,7 @@ Read first:
 | C2 | Weapons | Five beside the Minigun and the Rocket Pod: **Cannon**, **Shotgun**, **Laser**, **Homing missiles**, **Mines** |
 | C3 | Maps | One beside the Scrapyard and The City: **Docks** |
 | C4 | Order | The first vehicle, then a weapon that is only data, then the map, then the rest. New kinds and new mechanics come last |
-| C5 | How it lands | Each addition is its own branch and pull request from `main`. The re-pin is a commit of its own (below) |
+| C5 | How it lands | On the local branch `feat/content`, one commit a step as in the refactor, the re-pin a commit of its own (below). It is never pushed. When the phase is done it is squashed into `release/0.13.0` as one commit, the second after the refactor's. One pull request then takes both to `main`, merged with "Rebase and merge" (the owner, 2026-10-11) |
 
 The numbers below are starting targets. The balance probes tune them
 before each addition is registered.
@@ -49,13 +55,16 @@ before each addition is registered.
 Bots draw their vehicles (`modes/roster.ts`) and their guns (`armBot` over
 `WEAPON_IDS`) from the registries as they stand. So a new vehicle or
 weapon changes which machine and gun each seat gets in every match. That
-moves every pin: the change is on purpose, not a regression.
+moves every pin played with the registries' draws: the change is on
+purpose, not a regression. The yard's two pins (`sim/simulation.test.ts`)
+are not among them: the yard seats every machine in a Razor with a
+Minigun by hand (found at step 1).
 
 | Addition | Pins | Digests | `PROTOCOL` and fixtures |
 |---|---|---|---|
-| A vehicle | All eight move: the yard's two (`sim/simulation.test.ts`), Classic's four and the two custom ones (`server/server.test.ts`). The two-vehicle tests' draws move too | none | none: ids are strings on the wire |
-| A weapon of an existing kind | All eight move | none | none |
-| A weapon of a new kind | All eight move | none | `PROTOCOL` goes up: its wire event (`net/events.ts`), and its fixture in `net/protocol.test.ts`, in that commit |
+| A vehicle | Classic's six (four before the Docks) and the custom ones (`server/server.test.ts`): a custom pin whose few seats draw the same vehicles stays (step 4b); the yard's two don't. The two-vehicle tests' draws move too, and checks that lean on a draw (step 4b) | none | none: ids are strings on the wire |
+| A weapon of an existing kind | The same six move | none | none |
+| A weapon of a new kind | The same six move | none | `PROTOCOL` goes up: its wire event (`net/events.ts`), and its fixture in `net/protocol.test.ts`, in that commit |
 | A map | None of today's move. Two new Classic pins (team deathmatch and free for all on it) are added | a new line in `server/digests.json` | none |
 | A new mechanic (ram damage) | Moves through the registry, as a vehicle does | none | a new event or field, if it needs one |
 
@@ -63,14 +72,16 @@ moves every pin: the change is on purpose, not a regression.
 
 1. **Build it, unregistered.** One commit, or a few small ones. It holds
    the spec, the model or turret builder, the HUD icon and tests for
-   what is new, with nothing yet in `VEHICLES`, `MODELS`, `WEAPONS` or
-   `TURRETS`. Its gate A prints every pin as on `main`. That run is the
+   what is new (a weapon's sound recipe too), with nothing yet in
+   `VEHICLES`, `MODELS`, `WEAPONS` or `TURRETS`. Its gate A prints every pin as on `main`. That run is the
    proof that the old hashes still come out without the new entry.
 2. **Tune it.** In a scratch worktree, register it and run the balance
    probes (step 0). Fold the final numbers into step 1's commit before
    the branch is pushed.
 3. **Register it and re-pin**, in a commit of its own. That commit holds
-   the registry rows and the new pins, nothing else. Its message gives
+   the registry rows and the new pins, nothing else (a weapon's rows
+   include its `GUN_SOUNDS` row in `view/view.ts`: the compiler asks for
+   one per `WeaponId`). Its message gives
    the reason ("bots draw from the registries, so every seat's draw
    changed"). It lists each pin old → new, and names the step 1 commit
    whose gate printed the old ones. `LOG.md` gets the same.
@@ -80,10 +91,12 @@ moves every pin: the change is on purpose, not a regression.
    - Gate C: `scripts/arena-parity.mjs` for a map, and the probes once
      more on the final tree.
    - A look in Chrome on a real GPU (`NET_RUNBOOK.md` step 7).
-5. **Patch notes**, in a commit of their own: an entry in
-   `screens/PatchNotesPanel.tsx` (the game's version, shown in the menu).
+5. **Patch notes**, in a commit of their own: lines in the `0.13.0`
+   entry of `screens/PatchNotesPanel.tsx` (the game's version, shown in
+   the menu), which every addition adds to.
    Also `game/index.html`'s description, if it names the weapons.
-6. **The site's copy**, after the game's pull request is merged: the
+6. **The site's copy**, on the same branch, once the game's part of the
+   addition is checked: the
    guide (`garage.mdx` for vehicles and weapons, `arenas.mdx` for maps,
    and `how-to-play.mdx`, `index.mdx` and `faq.mdx` where they name
    them), `www/src/lib/site.ts` and the structured data. Facts come from
@@ -228,7 +241,6 @@ The compiler lists the places that handle each kind:
 - `fire` and the recorder's `fired`;
 - `TACTICS` and `flightTime` (`sim/ai/think.ts`);
 - `blastRadius` (`sim/ai/perception.ts`);
-- `FIRE_CUE` and `SPINS`;
 - the garage's `ROUND` and `kindSpecs`.
 
 The rest it can't list:
@@ -285,12 +297,39 @@ The owner confirms the kind and the heat numbers first.
   touched.
 - The site's copy, read once more against the game.
 
+### 11. Balance: the owner's calls (2026-10-16)
+
+After step 10 the owner chose, from the measured open points:
+- **Mines**: 80 a mine, set off within 5 m (no wreck from full for a
+  Razor); and the bots steer round the mines they see in a fight, not only
+  on their routes, so a person laying mines can't farm them.
+- **Rocket Pod**: first a 4 m blast; measured, the blast's size and
+  rocket bots' range didn't move its lead, only damage did, and the owner
+  chose 34 a rocket (blast 5 m), then to stop there.
+- **Brute**: 135 armour stays; its copy's "ram on the nose" becomes a
+  dozer blade (only the Rammer rams).
+- **Missile lock online**: judged where the person's page drew the target,
+  rewound as hitscan is; practice unchanged.
+Each its own commit, the pins moved only where bots' play changes.
+
 ## Open points, settled at their step
 
-- The Laser's kind and its heat (step 6): the owner's call.
-- The Shotgun's hits on the wire: one damage event a pellet, or one a
-  shot per machine hit (step 5).
-- Classic's queues across three arenas (step 3).
+- The Laser's kind and its heat (step 6): the owner chose `beam` on these
+  numbers, tuned to 40 a second on target (LOG.md, step 6).
+- Balance (step 11, the owner's calls): the Mines 80 within 5 m, bots
+  dodging them, so the weakest gun in bots' hands by far (K/D 0.32 to
+  0.42) and no farming bots with them; the Rocket Pod 34 a rocket, still
+  leading in bots' hands (1.45 to 1.70 in the final mix), stopped there
+  for people's play to judge; the Brute 135, its nose a dozer blade; a
+  person's missile lock judged where their page drew the target.
+- The missiles' lock (step 7): checked on the server against where the
+  target is now, not rewound to what the person saw; up close a fast
+  crossing car is hard to lock at 100 ms (LOG.md, 7a).
+- The Shotgun's hits on the wire (step 5): one damage event a shot per
+  machine hit, the pellets on it summed; a tracer (`sh`) a pellet.
+- Classic's queues across three arenas (step 3): measured (LOG.md, 3b).
+  Below about four searches a minute the third arena makes more people
+  wait out a search alone; "Any arena" is the owner's call.
 - The takeover correction (step 1).
 - The HUD's weapon panel and the garage's pagers at five vehicles and
   seven weapons: they page through the registries already. Look at

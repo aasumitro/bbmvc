@@ -54,7 +54,7 @@ for (let k = 0; k < steps; k++) {
       const me = room.combatants[human.seat]
       const aim = { x: me.position.x + Math.sin(k / 30) * 40, y: 1, z: me.position.z + Math.cos(k / 30) * 40 }
       const parsed = parseClient(
-        inputMessage(k + 1, { throttle: 1, steer: Math.sin(k / 40 + human.seat), handbrake: false, fire: true, recover: false, aim }, room.tick),
+        inputMessage(k + 1, { throttle: 1, steer: Math.sin(k / 40 + human.seat), handbrake: false, fire: true, recover: false, aim, lock: -1 }, room.tick),
       )
       if (parsed.ok && parsed.message.t === 'in') room.input(human, parsed.message, now)
     }

@@ -9,17 +9,30 @@ export interface WeaponState {
   ammo: number
   cooldown: number // seconds until the next round can fire
   reload: number // seconds of reload left, 0 when ready
+  lock: { target: number; time: number } // a missile's: the machine held in its window (-1 none) and for how long, seconds
 }
 
-export const armWeapon = (spec: WeaponSpec): WeaponState => ({ spec, ammo: spec.magazine, cooldown: 0, reload: 0 })
+export const armWeapon = (spec: WeaponSpec): WeaponState => ({ spec, ammo: spec.magazine, cooldown: 0, reload: 0, lock: { target: -1, time: 0 } })
 
-// Advances the weapon by one step; true when a round leaves the barrel.
+// A missile's lock is on once its target has been held long enough.
+export const locked = (weapon: Pick<WeaponState, 'spec' | 'lock'>) =>
+  weapon.spec.kind === 'missile' && weapon.lock.target >= 0 && weapon.lock.time >= weapon.spec.missile.lock
+
+// Advances the weapon by one step; true when a round leaves the barrel. A
+// beam's ammo is its heat left to spend: a pulse a round; overheated (out),
+// it cools whole as a gun reloads; with the trigger off it cools a pulse at
+// a time, `reloadTime` from hot to cold.
 export function pullTrigger(weapon: WeaponState, held: boolean, dt: number) {
   weapon.cooldown = Math.max(0, weapon.cooldown - dt)
   if (weapon.reload > 0) {
     weapon.reload = Math.max(0, weapon.reload - dt)
     if (weapon.reload === 0) weapon.ammo = weapon.spec.magazine
     return false
+  }
+  const { spec } = weapon
+  if (!held && spec.kind === 'beam' && weapon.ammo < spec.magazine && weapon.cooldown <= 1e-6) {
+    weapon.ammo++
+    weapon.cooldown += spec.reloadTime / spec.magazine
   }
   if (!held || weapon.cooldown > 1e-6) return false
   weapon.cooldown += 1 / weapon.spec.fireRate

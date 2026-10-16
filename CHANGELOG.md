@@ -7,6 +7,64 @@ version it shipped with.
 
 ## Unreleased
 
+## 0.13.0 — 2026-10-16
+
+The game's code reorganised into layers with one test runner, the game itself unchanged (plan
+and log: `.claude/work/refactor/`); then its first content phase: a third arena, four machines,
+five guns, three new weapon kinds and ram damage, each added on its own and tuned with balance
+probes, and the owner's balance pass after them (plan and log: `.claude/work/content/`). What
+players see is in the game's 0.13.0 patch notes.
+
+### Game (`game/`)
+
+- Layers: `game/src` in folders, lowest first (shared, render, content, sim, modes, view,
+  runtime, net, screens, hud), held by oxlint's import bans; Prettier formats `src/` and
+  `server/`, Tailwind's class order included.
+- Registries: vehicles (`VEHICLES`, `MODELS`), weapons as data by how they fire (`WEAPONS`,
+  `WeaponSpec`: gun, rocket, beam, missile, mine), maps (`MAPS`); each mode's HUD and results
+  panels its own. A seat plays the vehicle its person picked, its body replaced where it stands
+  when a person takes over a bot's (`changeVehicle`).
+- Content: The Docks (`content/arenas/docks.ts`); the Brute, the Scout, the Buggy and the
+  Rammer; the Cannon, the Shotgun (pellets), the Laser (beam: pulses and heat), the Homing
+  Missiles (missile: a lock held in a window, then homing) and the Mines (mine: laid behind,
+  armed, set off by a hostile); ram damage (`VehicleSpec.ram`, by closing speed, from Rapier's
+  contact pairs). Balance: the Mines 80 within 5 m, the Rocket Pod 34 a rocket.
+- Bots draw machines and guns from the registries, lock before firing missiles, lay mines
+  across a target's bow, charge in a Rammer, and route and steer round the mines they know of.
+- `PROTOCOL` 6 → 9: a seat's vehicle (7); the input's missile lock `lk` and the lock in the
+  player's own row (8); the mines' `ml` and `mg` events and the welcome's `mines` (9).
+- React and the engine (three, Rapier) in chunks of their own, Rapier's WASM loaded as a file:
+  the game's first download 1,462 → 1,179 kB gzipped at the refactor, 1,198 with the content.
+
+### Online play (`game/server/`)
+
+- A person's missile lock is judged where their page drew the target, from the hitscan
+  rewind's poses; practice and bots judge it in the present.
+- The replay's input rows carry the lock (older replays read none); the fair-play tally counts
+  missile locks.
+
+### Site (`www/`)
+
+- The guide's garage page: every machine and gun, the numbers as the game's registries hold
+  them; how to play, the modes, the arenas and the FAQ follow the content; the site's
+  description names the guns.
+
+### CI and tooling
+
+- Vitest is the one test runner (`npm test`: a unit project, then an integration one in
+  forks), every assertion of the old `*.check.ts` scripts kept; CI runs lint, `format:check`,
+  build and `npm test`; `npm run test:coverage`. The build id is the same on macOS as on CI.
+- `scripts/tailwind-classes.mjs`: every Tailwind class in the game and the site as Tailwind
+  writes it.
+- Balance probes run headless in Node, on any tree (`.claude/work/content/probe.mjs`).
+
+### Checks
+
+- 1,498 tests (1,299 at the refactor's end): every weapon kind and the ram on the simulation's
+  test yard, the lock and a mine over a real socket, every vehicle model and turret built
+  headless; whole bots-only matches pinned by hash, re-pinned on purpose at each registration
+  and balance change. Coverage 66.6 % of statements.
+
 ## 0.12.0 — 2026-10-06
 
 Custom lobbies: people pick a lobby from a list or come by invite, ready up in a waiting room,

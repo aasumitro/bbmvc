@@ -68,6 +68,14 @@ const FIELDS = {
   ru: [['event', 'raw']],
   // The next match starts on this seed
   go: [['seed', 'int']],
+  // A mine goes down
+  ml: [
+    ['id', 'int'],
+    ['owner', 'seat'],
+    ['at', 'cm3'],
+  ],
+  // A mine is gone: it went off (its burst follows), lay out its life, or made room for another
+  mg: [['id', 'int']],
 } as const satisfies Record<string, ReadonlyArray<readonly [string, Unit]>>
 
 type EventCode = keyof typeof FIELDS

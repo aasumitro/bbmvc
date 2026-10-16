@@ -7,14 +7,15 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import type { Arena, SpawnPoint } from '../content/arenas/arena.ts'
-import { WEAPONS } from '../content/weapons/weapons.ts'
+import { WEAPONS, type MineSpec } from '../content/weapons/weapons.ts'
 import { createFfaMode, lineUp as ffaLineUp } from '../modes/ffa/mode.ts'
 import { classic, type MatchSettings } from '../modes/matchSettings.ts'
 import type { Feed } from './matchMode.ts'
 import { createWorld, initPhysics, PHYSICS_STEP } from './physics.ts'
-import { createSimulation, enlist, type Combatant } from './simulation.ts'
+import { changeVehicle, createSimulation, enlist, type Combatant, type SimulationOptions } from './simulation.ts'
 import { createTdmMode, lineUp as tdmLineUp } from '../modes/tdm/mode.ts'
 import { drivePerformance, placeCar } from './drive.ts'
+import { armWeapon, locked } from './combat.ts'
 import { VEHICLES } from '../content/vehicles/vehicles.ts'
 
 await initPhysics()
@@ -46,7 +47,10 @@ const arena: Arena = {
 
 // A match as the runtime seats it, with what it reports. No bots unless
 // asked: the check drives. Classic's settings on the yard unless said.
-function setup(kind: 'tdm' | 'ffa', { seed = 1, bots = false, settings = classic(kind) as MatchSettings, yard = arena } = {}) {
+function setup(
+  kind: 'tdm' | 'ffa',
+  { seed = 1, bots = false, settings = classic(kind) as MatchSettings, yard = arena, seen = undefined as SimulationOptions['seen'] } = {},
+) {
   const arena = yard
   const world = createWorld(arena.colliders)
   const seats = kind === 'tdm' ? tdmLineUp(arena, settings.size) : ffaLineUp(arena, settings.size)
@@ -54,13 +58,24 @@ function setup(kind: 'tdm' | 'ffa', { seed = 1, bots = false, settings = classic
     enlist(world, id, { name: `car${id}`, team, seed: id + 1, spawn, vehicle: 'razor', weapon: WEAPONS.minigun, bot: bots }),
   )
   const mode = kind === 'tdm' ? createTdmMode(combatants, arena, world, seed, settings) : createFfaMode(combatants, arena, world, seed, settings)
-  const heard = { fired: 0, shot: 0, burst: 0, hurt: 0, struck: [] as number[], wrecked: [] as string[], respawned: [] as number[] }
+  const heard = {
+    fired: 0,
+    shot: 0,
+    burst: 0,
+    hurt: 0,
+    struck: [] as number[],
+    wrecked: [] as string[],
+    respawned: [] as number[],
+    laid: [] as number[],
+    gone: [] as number[],
+  }
   const sim = createSimulation({
     world,
     arena,
     combatants,
     mode,
     seed,
+    seen,
     events: {
       fired: () => heard.fired++,
       shot(_c, _muzzle, _shot, victim) {
@@ -75,6 +90,8 @@ function setup(kind: 'tdm' | 'ffa', { seed = 1, bots = false, settings = classic
       reloading() {},
       respawned: (c) => heard.respawned.push(c.id),
       recovered() {},
+      laid: (id) => heard.laid.push(id),
+      gone: (id) => heard.gone.push(id),
     },
   })
   const lines: string[] = []
@@ -148,7 +165,7 @@ function duel(combatants: readonly Combatant[], a: Combatant, b: Combatant) {
   )
 
   // rockets: a direct hit, then the blast; every car near it is shoved
-  me.weapon = { spec: WEAPONS.rocketPod, ammo: 6, cooldown: 0, reload: 0 }
+  me.weapon = armWeapon(WEAPONS.rocketPod)
   duel(m.combatants, me, enemy)
   const hull = enemy.health
   m.run(3, () => m.heard.burst > 0)
@@ -168,6 +185,273 @@ function duel(combatants: readonly Combatant[], a: Combatant, b: Combatant) {
     'restart: everyone whole on their start',
   )
   m.world.free()
+}
+
+// --- a gun with pellets ----------------------------------------------------------------
+// One shot casts a ray a pellet, each its own spread; the pellets that meet
+// a machine are one hit on it, their damage summed.
+
+{
+  const m = setup('tdm')
+  const [me] = m.combatants
+  const enemy = m.combatants[4]
+  m.run(4, () => m.mode.rules.phase === 'active')
+  me.weapon = armWeapon({ ...WEAPONS.minigun, pellets: 8, fireRate: 1 })
+  duel(m.combatants, me, enemy)
+  me.control.fire = false
+  m.run(0.2) // the cars where duel put them, in the physics too
+  Object.assign(m.heard, { fired: 0, shot: 0, hurt: 0, struck: [] })
+  me.control.fire = true
+  m.run(0.5)
+  check(
+    m.heard.fired === 1 && m.heard.shot === 8 && m.heard.struck.length === 8 && m.heard.struck.every((id) => id === enemy.id),
+    `a shot of eight pellets at 20 m: fired once, eight rays, all on the car (${m.heard.fired}, ${m.heard.shot}, ${m.heard.struck.length})`,
+  )
+  check(
+    m.heard.hurt === 1 && Math.abs(enemy.stats.damageTaken - 8 * WEAPONS.minigun.damage) < 1e-6,
+    `the eight are one hit, their damage summed (${m.heard.hurt} hurt, ${enemy.stats.damageTaken} taken)`,
+  )
+}
+
+// --- a beam ---------------------------------------------------------------------------
+// Held on a car, a beam pulses ten times a second, each pulse a ray and a hit:
+// its damage a second is the pulse's times ten.
+
+{
+  const m = setup('tdm')
+  const [me] = m.combatants
+  const enemy = m.combatants[4]
+  m.run(4, () => m.mode.rules.phase === 'active')
+  me.weapon = armWeapon({ ...WEAPONS.minigun, kind: 'beam', damage: 3, fireRate: 10, magazine: 40, reloadTime: 2, spread: 0.001 })
+  duel(m.combatants, me, enemy)
+  me.control.fire = false
+  m.run(0.2)
+  Object.assign(m.heard, { fired: 0, shot: 0, hurt: 0, struck: [] })
+  me.control.fire = true
+  m.run(0.99)
+  check(
+    m.heard.fired === 10 && m.heard.shot === 10 && m.heard.hurt === 10 && Math.abs(enemy.stats.damageTaken - 30) < 1e-6,
+    `a beam held on a car for a second: ten pulses, ten hits, 30 dealt (${m.heard.fired}, ${m.heard.hurt}, ${enemy.stats.damageTaken})`,
+  )
+}
+
+// --- missiles ------------------------------------------------------------------------
+// A missile's lock: the hostile its controls name, held in the window round
+// the aim for the lock time, gone once it leaves it; never a teammate. Fired locked, a missile
+// turns after a car crossing ahead and hits it; fired without, it flies
+// straight past.
+
+{
+  const m = setup('tdm')
+  const [me] = m.combatants
+  const enemy = m.combatants[4]
+  m.run(4, () => m.mode.rules.phase === 'active')
+  me.weapon = armWeapon(WEAPONS.missiles)
+  duel(m.combatants, me, enemy)
+  me.control.fire = false
+  placeCar(enemy.car, { x: 0, y: 0, z: 30 }, Math.PI / 2)
+  const crossing = () => {
+    placeCar(enemy.car, { x: 0, y: 0, z: 30 }, Math.PI / 2)
+    m.run(0.1)
+    me.control.aim.set(0, 1.1, 30)
+    enemy.car.body.setLinvel({ x: 14, y: 0, z: 0 }, true)
+    const hull = enemy.health
+    const bursts = m.heard.burst
+    me.control.fire = true
+    m.run(1 / 60)
+    me.control.fire = false
+    m.run(2, () => m.heard.burst > bursts)
+    enemy.car.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
+    return hull - enemy.health
+  }
+  me.control.aim.set(0, 1.1, 30)
+  me.control.lock = enemy.id
+  m.run(0.5)
+  const holding = me.weapon.lock.target === enemy.id && !locked(me.weapon)
+  m.run(0.35)
+  check(holding && locked(me.weapon), `a missile's lock takes its time in the window: held at 0.5 s, on by 0.85 s (${me.weapon.lock.time.toFixed(2)} s)`)
+  const homed = crossing()
+  check(homed > 0, `fired locked, a missile turns after a car crossing at 14 m/s 30 m off and hits it (${homed.toFixed(1)} dealt)`)
+  me.weapon = armWeapon(WEAPONS.missiles)
+  me.control.lock = -1
+  enemy.health = enemy.maxHealth
+  const straight = crossing()
+  check(straight === 0, `fired without a lock, it flies straight past (${straight.toFixed(1)} dealt)`)
+  placeCar(enemy.car, { x: 0, y: 0, z: 30 }, Math.PI / 2)
+  me.control.aim.set(0, 1.1, 30)
+  me.control.lock = enemy.id
+  m.run(1)
+  const relock = locked(me.weapon)
+  me.control.aim.set(30, 1.1, 0)
+  m.run(2 / 60)
+  check(relock && me.weapon.lock.target === -1 && me.weapon.lock.time === 0, 'the lock is gone the step its target leaves the window')
+  const mate = m.combatants[1]
+  placeCar(mate.car, { x: 0, y: 0, z: -30 }, 0)
+  me.control.aim.set(0, 1.1, -30)
+  me.control.lock = mate.id
+  m.run(1)
+  check(me.weapon.lock.target === -1, 'a teammate in the window is never locked on')
+}
+
+// Online, a person's lock is judged where their page drew the target (the
+// game server's `seen`, from its rewind): held on a car that was in the
+// window as drawn though it has left it since, and not on one in the window
+// now that wasn't as drawn.
+{
+  const drawn = new THREE.Vector3()
+  const m = setup('tdm', { seen: (_c, _target, out) => !!out.copy(drawn) })
+  const [me] = m.combatants
+  const enemy = m.combatants[4]
+  m.run(4, () => m.mode.rules.phase === 'active')
+  me.weapon = armWeapon(WEAPONS.missiles)
+  duel(m.combatants, me, enemy)
+  me.control.fire = false
+  m.run(0.2)
+  drawn.copy(enemy.position) // dead ahead, 20 m off, as the page drew it
+  placeCar(enemy.car, { x: 40, y: 0, z: 0 }, 0) // where it is now: well off to the side
+  me.control.aim.set(0, 1.1, 20)
+  me.control.lock = enemy.id
+  m.run(1)
+  const held = locked(me.weapon)
+  placeCar(enemy.car, { x: 0, y: 0, z: 20 }, Math.PI) // back in the window now ...
+  drawn.set(40, enemy.position.y, 0) // ... but drawn where it was
+  m.run(2 / 60)
+  check(held && me.weapon.lock.target === -1, 'online, a lock is judged where the page drew the target: held as drawn, not where it is now')
+}
+
+// --- mines ---------------------------------------------------------------------------
+// A mine goes down behind the machine that lays it, on the ground. Armed
+// after its second, it goes off under a hostile within its trigger (the
+// whole charge to that machine, nothing to its layer), never under a
+// teammate; at most three of a machine's lie at once, each for 30 s; a
+// restart clears them.
+
+{
+  const m = setup('tdm')
+  const [me] = m.combatants
+  const [mate, enemy] = [m.combatants[1], m.combatants[4]]
+  m.run(4, () => m.mode.rules.phase === 'active')
+  const layer: MineSpec = {
+    ...WEAPONS.minigun,
+    kind: 'mine',
+    damage: 60,
+    fireRate: 1,
+    magazine: 6,
+    reloadTime: 6,
+    range: 30,
+    spread: 0,
+    mine: { arm: 1, trigger: 4, blast: 6, down: 3, life: 30 },
+  }
+  duel(m.combatants, me, enemy)
+  me.control.fire = false
+  placeCar(enemy.car, { x: -40, y: 0, z: 60 }, 0)
+  me.weapon = armWeapon(layer)
+  // a mine laid from (x, z), facing south; then the machine is put out of the way
+  const layAt = (x: number, z: number) => {
+    placeCar(me.car, { x, y: 0, z }, 0)
+    m.run(0.1)
+    me.weapon.cooldown = 0
+    me.control.fire = true
+    m.run(1 / 60)
+    me.control.fire = false
+    placeCar(me.car, { x: -60, y: 0, z: -60 }, 0)
+    m.run(1 / 60)
+    return m.sim.mines.at(-1)!
+  }
+  const first = layAt(0, 0)
+  check(
+    m.heard.laid.length === 1 && first.owner === me && first.position.z < -2.5 && Math.abs(first.position.x) < 0.3 && Math.abs(first.position.y) < 0.3,
+    `a mine goes down behind the machine, on the ground (${first.position
+      .toArray()
+      .map((n) => n.toFixed(2))
+      .join(', ')})`,
+  )
+  placeCar(enemy.car, { x: first.position.x, y: 0, z: first.position.z }, 0)
+  const hull = enemy.health
+  m.run(0.5)
+  const early = m.sim.mines.includes(first) && enemy.health === hull
+  m.run(0.6, () => !m.sim.mines.includes(first))
+  check(
+    early && !m.sim.mines.includes(first) && m.heard.gone.includes(first.id) && hull - enemy.health === 60 && me.health === me.maxHealth,
+    `not before its second, then a hostile on it sets it off: the whole 60 to it (${hull - enemy.health}), nothing to its layer`,
+  )
+  const second = layAt(30, 0)
+  m.run(1.2)
+  placeCar(mate.car, { x: second.position.x, y: 0, z: second.position.z }, 0)
+  const bursts = m.heard.burst
+  m.run(0.5)
+  check(m.sim.mines.includes(second) && m.heard.burst === bursts && mate.health === mate.maxHealth, 'a teammate on an armed mine never sets it off')
+  placeCar(mate.car, { x: -80, y: 0, z: 60 }, 0)
+  const third = layAt(60, 0)
+  layAt(90, 0)
+  layAt(120, 0)
+  const mine = m.sim.mines.filter((x) => x.owner === me)
+  check(
+    mine.length === 3 && !mine.includes(second) && m.heard.gone.includes(second.id) && mine.includes(third),
+    'three of a machine’s lie at most: a fourth clears its oldest',
+  )
+  m.run(30.5)
+  check(m.sim.mines.length === 0 && mine.every((x) => m.heard.gone.includes(x.id)), 'a mine lies 30 s at most')
+  const last = layAt(0, 40)
+  m.sim.restart(2)
+  check(m.sim.mines.length === 0 && m.heard.gone.includes(last.id), 'a restart clears the mines down')
+}
+
+// --- rams --------------------------------------------------------------------------
+// A machine with a ram hurts what its nose strikes, by how fast it was
+// closing on it; the same car not again for a while, a blow outside the
+// ram's arc nothing, and a wreck it causes is its kill.
+
+{
+  const m = setup('tdm')
+  const [me] = m.combatants
+  const enemy = m.combatants[4]
+  m.run(4, () => m.mode.rules.phase === 'active')
+  const { ram } = VEHICLES.rammer
+  changeVehicle(m.world, me, 'rammer')
+  duel(m.combatants, me, enemy)
+  me.control.fire = false
+  // charging a car side on across its nose, from 16 m
+  placeCar(enemy.car, { x: 0, y: 0, z: 16 }, Math.PI / 2)
+  m.run(0.2)
+  const hull = enemy.health
+  me.control.throttle = 1
+  let closing = 0 // as the step that struck began
+  m.run(4, () => {
+    if (enemy.health < hull) return true
+    closing = me.velocity.z - enemy.velocity.z
+    return false
+  })
+  const blow = hull - enemy.health
+  check(
+    blow > 0 && Math.abs(blow - ram!.damage * closing) < ram!.damage * 1.5,
+    `a ram strikes the car on its nose by how fast it was closing: ${blow.toFixed(1)} at ${closing.toFixed(1)} m/s`,
+  )
+  const after = enemy.health
+  m.run(0.5)
+  me.control.throttle = 0
+  check(enemy.health === after, `pushing on, not again within 0.6 s (${(after - enemy.health).toFixed(1)})`)
+  // a car driving into its flank, outside the ram's arc
+  placeCar(me.car, { x: 0, y: 0, z: 0 }, 0)
+  placeCar(enemy.car, { x: 14, y: 0, z: 0 }, -Math.PI / 2)
+  m.run(0.2)
+  const [mine, theirs] = [me.health, enemy.health]
+  enemy.control.throttle = 1
+  m.run(3, () => me.position.x < -0.5)
+  enemy.control.throttle = 0
+  check(
+    me.position.x < -0.5 && me.health === mine && enemy.health === theirs,
+    'a car striking its flank, outside the ram’s arc, takes nothing and deals nothing',
+  )
+  // a wreck the ram causes is its kill
+  placeCar(me.car, { x: 0, y: 0, z: 0 }, 0)
+  placeCar(enemy.car, { x: 0, y: 0, z: 16 }, Math.PI / 2)
+  m.run(0.2)
+  enemy.health = 5
+  me.control.throttle = 1
+  m.run(4, () => !enemy.alive)
+  me.control.throttle = 0
+  check(m.heard.wrecked.includes(`${me.id}>${enemy.id}`) && me.stats.kills === 1, 'a wreck the ram causes is its kill')
 }
 
 // --- free for all ------------------------------------------------------------------
@@ -283,7 +567,7 @@ for (const kind of ['ffa', 'tdm'] as const) {
     !mate.alive && tdm?.score.join() === '-1,0' && me.stats.teamKills === 1 && me.stats.kills === 0 && m.lines.includes('teamkill 0>1'),
     'friendly fire on: the minigun wrecks a teammate, a team kill, fed as one',
   )
-  me.weapon = { spec: WEAPONS.rocketPod, ammo: 6, cooldown: 0, reload: 0 }
+  me.weapon = armWeapon(WEAPONS.rocketPod)
   me.control.aim.set(me.position.x, 0, me.position.z + 4) // the ground just ahead
   const bursts = m.heard.burst
   m.run(1, () => m.heard.burst > bursts)

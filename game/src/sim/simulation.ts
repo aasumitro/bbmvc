@@ -4,10 +4,10 @@ import { createBrain, provoke, type Brain } from './ai/brain.ts'
 import { think } from './ai/think.ts'
 import type { Skill } from './difficulty.ts'
 import type { Arena, SpawnPoint } from '../content/arenas/arena.ts'
-import { armWeapon, castRound, pullTrigger, scatterAim, type Shot, type WeaponState } from './combat.ts'
-import type { RocketSpec, WeaponSpec } from '../content/weapons/weapons.ts'
+import { armWeapon, castRound, locked, pullTrigger, scatterAim, type Shot, type WeaponState } from './combat.ts'
+import { blastOf, pelletsOf, type MineSpec, type MissileSpec, type RocketSpec, type WeaponSpec } from '../content/weapons/weapons.ts'
 import type { MatchMode } from './matchMode.ts'
-import type { Point } from '../shared/math.ts'
+import { wrap, type Point } from '../shared/math.ts'
 import { createRng } from '../shared/rng.ts'
 import { createStats, type Stats } from './scoring.ts'
 import { createCar, driveCar, forwardSpeed, placeCar, rightIfUpended, wheelsOnGround, type Car, type DriveInput } from './drive.ts'
@@ -37,6 +37,7 @@ interface Control extends DriveInput {
   fire: boolean
   recover: boolean // asks to be put back on the road when stuck
   aim: THREE.Vector3 // world point the gun is laid on
+  lock: number // the seat a missile is to lock on (the hostile in the pilot's or bot's sights), -1 none
 }
 
 export interface Combatant {
@@ -91,15 +92,32 @@ export interface SimEvents {
   reloading(c: Combatant, started: boolean): void // the magazine ran dry (started) or is full again
   respawned(c: Combatant): void // whole again at a start: a respawn or a restart
   recovered(c: Combatant): void // stuck, put back on the road
+  laid(id: number, owner: Combatant, at: THREE.Vector3): void // a mine went down
+  gone(id: number): void // a mine is gone: it went off (its burst follows), lay out its life, or made room for another
+}
+
+// A mine down: whose, where, and how long it has lain.
+export interface Mine {
+  id: number // mines laid before it in this simulation: the wire names it by this
+  owner: Combatant
+  spec: MineSpec
+  position: THREE.Vector3
+  age: number // seconds
 }
 
 interface Rocket {
   shooter: Combatant
-  spec: RocketSpec
+  spec: RocketSpec | MissileSpec
   position: THREE.Vector3
   direction: THREE.Vector3 // unit
   travelled: number // metres
+  target?: Combatant // a missile fired locked: it turns after this machine
 }
+
+// A missile's lock window: how far off the gun's aim a target may sit, radians.
+const LOCK_CONE = 0.2
+// What flies: a rocket's numbers or a missile's.
+const flightOf = (spec: RocketSpec | MissileSpec) => (spec.kind === 'rocket' ? spec.rocket : spec.missile)
 
 function readPose(c: Combatant) {
   c.car.body.translation(c.position)
@@ -120,7 +138,7 @@ function reset(c: Combatant, spawn = c.spawn) {
   c.alive = true
   c.deadFor = 0
   c.weapon = armWeapon(c.weapon.spec)
-  Object.assign(c.control, { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false })
+  Object.assign(c.control, { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false, lock: -1 })
   c.stuck = 0
   c.recovery = 0
   c.control.aim.set(Math.sin(spawn.heading) * 30, 1.5, Math.cos(spawn.heading) * 30).add(c.position)
@@ -145,7 +163,7 @@ export function enlist(world: RAPIER.World, id: number, { name, team, seed, spaw
     deadFor: 0,
     stats: createStats(),
     weapon: armWeapon(weapon),
-    control: { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false, aim: new THREE.Vector3() },
+    control: { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false, aim: new THREE.Vector3(), lock: -1 },
     position: new THREE.Vector3(),
     rotation: new THREE.Quaternion(),
     velocity: new THREE.Vector3(),
@@ -172,6 +190,10 @@ export interface SimulationOptions {
   // `random` as castRound does; false leaves the round to the present-time
   // cast. Unset, every round is cast in the present.
   castRound?: (c: Combatant, muzzle: THREE.Vector3, shot: Shot, random: () => number) => boolean
+  // Optional (the same): where machine `c`'s page drew `target`, a little
+  // in the past, into `out`; false judges its missile's lock where the
+  // target is now. Unset, every lock is judged in the present.
+  seen?: (c: Combatant, target: Combatant, out: THREE.Vector3) => boolean
 }
 
 // The simulation's own stream, apart from the one the mode's rules draw from the same seed.
@@ -218,7 +240,7 @@ export function changeVehicle(world: RAPIER.World, c: Combatant, vehicle: Vehicl
   return true
 }
 
-export function createSimulation({ world, arena, combatants, mode, events, seed, castRound: castAt }: SimulationOptions) {
+export function createSimulation({ world, arena, combatants, mode, events, seed, castRound: castAt, seen }: SimulationOptions) {
   const { rules } = mode
   let random = stream(seed)
   const hostile = (a: Combatant, b: Combatant) => a.team !== b.team
@@ -228,8 +250,9 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
   // steps, poses are read back (crashes found), rockets fly; then, while the
   // match is `live`, the rules tick and anyone due back in respawns.
   function step(dt: number, live: boolean) {
+    elapsed += dt
     const held = rules.phase === 'preMatch' // lined up on the grid: nobody moves or shoots yet
-    for (const c of combatants) if (c.brain && c.alive && live && !held) think(c, combatants, world, arena.nav, dt, random, mode.plan)
+    for (const c of combatants) if (c.brain && c.alive && live && !held) think(c, combatants, world, arena.nav, dt, random, mode.plan, mines)
     for (const c of combatants) {
       if (!c.present) continue
       c.last.position.copy(c.position)
@@ -239,6 +262,7 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
       if (c.alive) {
         rightIfUpended(c.car, dt)
         const reloading = c.weapon.reload > 0
+        holdLock(c, dt)
         if (pullTrigger(c.weapon, c.control.fire && !held, dt)) fire(c)
         if (reloading !== c.weapon.reload > 0) events.reloading(c, !reloading)
       } else {
@@ -260,10 +284,50 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
       }
       if (c.alive && !held) watchStuck(c, dt)
     }
+    for (const c of combatants) if (c.present && c.alive) strike(c)
     flyRockets(dt)
+    tendMines(dt)
     if (!live) return
     rules.tick(dt)
     for (const c of combatants) if (rules.respawnDue(c.id)) respawn(c)
+  }
+
+  // --- rams --------------------------------------------------------------
+
+  // A machine with a ram (VehicleSpec.ram) hurts each machine its body touched
+  // this step inside the ram's arc round its nose: `ram.damage` a m/s it was
+  // closing on that machine before they touched, if past RAM.least; the same
+  // pair strikes again only RAM.again seconds on. The rules say who is hurt.
+  const RAM = { least: 4, again: 0.6 }
+  const struckAt = combatants.map(() => combatants.map(() => -Infinity)) // by rammer, then by machine struck: the simulation's seconds
+  const touched = new Set<Combatant>()
+  let elapsed = 0
+  function strike(c: Combatant) {
+    const ram = VEHICLES[c.vehicle].ram
+    if (!ram) return
+    for (let i = 0; i < c.car.body.numColliders(); i++) {
+      const own = c.car.body.collider(i)
+      world.contactPairsWith(own, (other) => {
+        const o = combatantOf(other)
+        if (!o || o === c || touched.has(o)) return
+        world.contactPair(own, other, (manifold) => {
+          if (manifold.numContacts() > 0) touched.add(o)
+        })
+      })
+    }
+    const q = c.rotation
+    const heading = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y))
+    for (const o of combatants) {
+      if (!touched.has(o) || !o.alive || elapsed - struckAt[c.id][o.id] < RAM.again) continue
+      const dx = o.position.x - c.position.x
+      const dz = o.position.z - c.position.z
+      if (Math.abs(wrap(Math.atan2(dx, dz) - heading)) > ram.arc) continue
+      const closing = ((c.last.velocity.x - o.last.velocity.x) * dx + (c.last.velocity.z - o.last.velocity.z) * dz) / (Math.hypot(dx, dz) || 1)
+      if (closing < RAM.least) continue
+      struckAt[c.id][o.id] = elapsed
+      damage(o, ram.damage * closing, c)
+    }
+    touched.clear()
   }
 
   // --- stuck -------------------------------------------------------------
@@ -306,23 +370,33 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
   const shot: Shot = { point: new THREE.Vector3(), normal: new THREE.Vector3(), collider: null }
   const muzzle = new THREE.Vector3()
   const heading = new THREE.Vector3()
+  const struck = new Map<Combatant, number>() // a shot's damage on each machine its pellets met
 
   function fire(c: Combatant) {
     mode.fired(c.id)
+    const { spec } = c.weapon
+    if (spec.kind === 'mine') return lay(c, spec) // dropped behind the machine, not fired from the gun
     const { mount, barrel } = VEHICLES[c.vehicle].turret
     muzzle.set(mount[0], mount[1], mount[2]).applyQuaternion(c.rotation).add(c.position)
     heading.subVectors(c.control.aim, muzzle).normalize()
     muzzle.addScaledVector(heading, barrel)
     events.fired(c, muzzle, heading)
-    const { spec } = c.weapon
     switch (spec.kind) {
       case 'rocket':
         return launch(c, spec)
-      case 'gun': {
-        if (!castAt?.(c, muzzle, shot, random)) castRound(world, spec, muzzle, c.control.aim, c.car.body, shot, random)
-        const victim = shot.collider ? combatantOf(shot.collider) : undefined
-        events.shot(c, muzzle, shot, victim)
-        if (victim) damage(victim, spec.damage, c)
+      case 'missile':
+        return launch(c, spec, locked(c.weapon) ? combatants[c.weapon.lock.target] : undefined)
+      case 'gun':
+      case 'beam': {
+        // a ray a pellet (a beam's pulse is one), each its own spread; a machine struck takes the shot's pellets on it as one hit
+        for (let pellet = pelletsOf(spec); pellet > 0; pellet--) {
+          if (!castAt?.(c, muzzle, shot, random)) castRound(world, spec, muzzle, c.control.aim, c.car.body, shot, random)
+          const victim = shot.collider ? combatantOf(shot.collider) : undefined
+          events.shot(c, muzzle, shot, victim)
+          if (victim) struck.set(victim, (struck.get(victim) ?? 0) + spec.damage)
+        }
+        for (const [victim, amount] of struck) damage(victim, amount, c)
+        struck.clear()
         return
       }
       default:
@@ -337,15 +411,65 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
   const flight = new RAPIER.Ray(new THREE.Vector3(), new THREE.Vector3())
   const ahead = new THREE.Vector3()
 
-  function launch(c: Combatant, spec: RocketSpec) {
+  function launch(c: Combatant, spec: RocketSpec | MissileSpec, target?: Combatant) {
     const direction = scatterAim(spec, muzzle, c.control.aim, new THREE.Vector3(), random)
-    rockets.push({ shooter: c, spec, position: muzzle.clone(), direction, travelled: 0 })
+    rockets.push({ shooter: c, spec, position: muzzle.clone(), direction, travelled: 0, target })
   }
 
+  // A missile's lock: the machine its controls name, held in the window —
+  // alive and hostile, inside its range and the cone round the gun's aim, in
+  // sight from the gun — for long enough (`locked`, combat.ts). Anything
+  // else, or another machine named, and it starts over. Online, a person's
+  // is judged where their page drew the target (`seen`); only the arena
+  // blocks that view, the other machines having moved on since.
+  const toTarget = new THREE.Vector3()
+  const toAim = new THREE.Vector3()
+  const sight = new RAPIER.Ray(new THREE.Vector3(), new THREE.Vector3())
+  function holdLock(c: Combatant, dt: number) {
+    const { spec, lock } = c.weapon
+    if (spec.kind !== 'missile') return
+    const target = c.control.lock >= 0 ? combatants[c.control.lock] : undefined
+    if (!target || target === c || !target.alive || !target.present || !hostile(c, target) || !inWindow(c, target, spec)) {
+      lock.target = -1
+      lock.time = 0
+      return
+    }
+    if (lock.target !== target.id) Object.assign(lock, { target: target.id, time: 0 })
+    lock.time = Math.min(lock.time + dt, spec.missile.lock)
+  }
+  function inWindow(c: Combatant, target: Combatant, spec: MissileSpec) {
+    const { mount } = VEHICLES[c.vehicle].turret
+    muzzle.set(mount[0], mount[1], mount[2]).applyQuaternion(c.rotation).add(c.position)
+    const past = !!seen?.(c, target, toTarget)
+    if (!past) toTarget.copy(target.position)
+    toTarget.y += 0.9
+    toTarget.sub(muzzle)
+    const distance = toTarget.length()
+    if (distance > spec.range || toTarget.angleTo(toAim.subVectors(c.control.aim, muzzle)) > LOCK_CONE) return false
+    sight.origin = muzzle
+    sight.dir = toTarget.divideScalar(distance)
+    if (past) return !world.castRay(sight, distance, true, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC)
+    const hit = world.castRay(sight, distance, true, undefined, undefined, undefined, c.car.body)
+    return !hit || combatantOf(hit.collider) === target
+  }
+
+  const want = new THREE.Vector3()
+  const axis = new THREE.Vector3()
+  const turn = new THREE.Quaternion()
   function flyRockets(dt: number) {
     for (let i = rockets.length - 1; i >= 0; i--) {
       const rocket = rockets[i]
-      const reach = rocket.spec.rocket.speed * dt
+      const { target } = rocket
+      if (target && rocket.spec.kind === 'missile' && target.alive && target.present) {
+        // after its target, no faster than it can turn
+        want.copy(target.position).y += 0.9
+        want.sub(rocket.position).normalize()
+        const angle = rocket.direction.angleTo(want)
+        const most = rocket.spec.missile.turn * dt
+        if (angle <= most) rocket.direction.copy(want)
+        else if (axis.crossVectors(rocket.direction, want).lengthSq() > 1e-12) rocket.direction.applyQuaternion(turn.setFromAxisAngle(axis.normalize(), most))
+      }
+      const reach = flightOf(rocket.spec).speed * dt
       flight.origin = rocket.position
       flight.dir = rocket.direction
       const hit = world.castRay(flight, reach, true, undefined, undefined, undefined, rocket.shooter.car.body)
@@ -355,27 +479,77 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
       rocket.travelled += reach
       if (hit || rocket.travelled >= rocket.spec.range) {
         rockets.splice(i, 1)
-        detonate(rocket, hit ? combatantOf(hit.collider) : undefined)
+        detonate(rocket.shooter, rocket.spec, rocket.position, hit ? combatantOf(hit.collider) : undefined)
       }
     }
   }
 
+  // A mine goes down a metre behind the machine's tail, on whatever is under
+  // it; one past `mine.down` of the machine's clears its oldest.
+  const mines: Mine[] = []
+  let laid = 0
+  const drop = new RAPIER.Ray(new THREE.Vector3(), new THREE.Vector3(0, -1, 0))
+  function lay(c: Combatant, spec: MineSpec) {
+    const own = mines.filter((m) => m.owner === c)
+    if (own.length >= spec.mine.down) clear(mines.indexOf(own[0]))
+    const at = new THREE.Vector3(0, 0, -(VEHICLES[c.vehicle].chassis.box[2] / 2 + 1)).applyQuaternion(c.rotation).add(c.position)
+    drop.origin = { x: at.x, y: at.y + 1.5, z: at.z }
+    const ground = world.castRay(drop, 4, true, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC)
+    if (ground) at.y = drop.origin.y - ground.timeOfImpact
+    mines.push({ id: laid++, owner: c, spec, position: at, age: 0 })
+    events.laid(laid - 1, c, at)
+  }
+  function clear(i: number) {
+    const [mine] = mines.splice(i, 1)
+    events.gone(mine.id)
+  }
+
+  // Each mine ages, and past its life it's gone. Armed, it goes off under
+  // the first hostile machine (in seat order) whose hull is within its trigger.
+  const hull = new THREE.Vector3()
+  function tendMines(dt: number) {
+    for (let i = mines.length - 1; i >= 0; i--) {
+      const mine = mines[i]
+      const { arm, trigger, life } = mine.spec.mine
+      mine.age += dt
+      if (mine.age >= life) {
+        clear(i)
+        continue
+      }
+      if (mine.age < arm) continue
+      const victim = combatants.find(
+        (c) =>
+          c.alive &&
+          c.present &&
+          hostile(mine.owner, c) &&
+          hull
+            .copy(c.position)
+            .setY(c.position.y + 0.9)
+            .distanceTo(mine.position) <= trigger,
+      )
+      if (!victim) continue
+      clear(i)
+      detonate(mine.owner, mine.spec, mine.position, victim)
+    }
+  }
+
   // Damage and shove fall off linearly to nothing at the blast edge; a direct
-  // hit deals the full warhead. Every car is shoved; the rules say who is hurt.
+  // hit (or the machine that set a mine off) takes the full warhead. Every
+  // car is shoved; the rules say who is hurt.
   const shove = new THREE.Vector3()
-  function detonate(rocket: Rocket, struck?: Combatant) {
-    const { blast } = rocket.spec.rocket
-    events.burst(rocket.position)
+  function detonate(shooter: Combatant, spec: RocketSpec | MissileSpec | MineSpec, at: THREE.Vector3, struck?: Combatant) {
+    const blast = blastOf(spec)
+    events.burst(at)
     for (const c of combatants) {
       if (!c.alive) continue
       shove.copy(c.position).y += 0.9 // hull centre
-      shove.sub(rocket.position)
+      shove.sub(at)
       const falloff = c === struck ? 1 : 1 - shove.length() / blast
       if (falloff <= 0) continue
       shove.normalize()
       shove.y = Math.max(shove.y, 0.3) // lifts as well as pushes, so the car rocks over
       c.car.body.applyImpulse(shove.normalize().multiplyScalar(c.car.handling.mass * BLAST_SHOVE * falloff), true)
-      damage(c, rocket.spec.damage * falloff, rocket.shooter)
+      damage(c, spec.damage * falloff, shooter)
     }
   }
 
@@ -446,12 +620,14 @@ export function createSimulation({ world, arena, combatants, mode, events, seed,
   return {
     step,
     combatantOf,
+    mines: mines as readonly Mine[],
     // Everyone back where they lined up, whole, the empty seats' machines
-    // too (as their rules start over); nothing left in the air; randomness
-    // from the new `seed`.
+    // too (as their rules start over); nothing left in the air or on the
+    // ground; randomness from the new `seed`.
     restart(seed: number) {
       random = stream(seed)
       rockets.length = 0
+      for (let i = mines.length - 1; i >= 0; i--) clear(i)
       for (const c of combatants) {
         reset(c)
         if (!c.present) intoPlay(c)

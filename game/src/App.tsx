@@ -15,7 +15,7 @@ import { MainMenu } from './screens/MainMenu.tsx'
 import { MapSelect, type Pick } from './screens/MapSelect.tsx'
 import { Matchmaking } from './screens/Matchmaking.tsx'
 
-// Menu -> garage (pick the loadout) -> map select (mode and arena) -> match; the match exits back to the garage.
+// Menu -> garage (pick the loadout, kept as it changes) -> menu; menu -> map select (mode and arena) -> match; the match exits back to the garage.
 // Classic's Find Match searches from the map select and keeps searching on
 // every screen; the match found shows over whatever is up (Matchmaking), and
 // once the server has seated the player, the game goes into that match from
@@ -92,8 +92,7 @@ function App() {
         }}
       />
     )
-  else if (screen === 'garage')
-    content = <Garage loadout={loadout} onLoadout={changeLoadout} onBack={() => setScreen('menu')} onSelect={() => setScreen('map-select')} />
+  else if (screen === 'garage') content = <Garage loadout={loadout} onLoadout={changeLoadout} onBack={() => setScreen('menu')} />
   else if (screen === 'map-select')
     content = (
       <MapSelect

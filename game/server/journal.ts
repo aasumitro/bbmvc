@@ -18,7 +18,7 @@ export const STANDING = 1
 export const COASTING = 2
 export interface Given {
   kind: typeof DRIVING | typeof STANDING | typeof COASTING
-  input: Pick<Input, 'throttle' | 'steer' | 'handbrake' | 'fire' | 'recover' | 'aim' | 'view'>
+  input: Pick<Input, 'throttle' | 'steer' | 'handbrake' | 'fire' | 'recover' | 'aim' | 'lock' | 'view'>
 }
 
 // A replay's lines: the room's header, then what happened after step `k` (a
@@ -49,19 +49,20 @@ export type ReplayLine =
   | { k: number; close: 1 }
 
 // A seat's given on step `tick`, as its `in` row: [seat, kind, throttle,
-// steer, handbrake, fire, recover, aim x, y, z, lag] — lag: steps the tick
-// the page saw lies behind `tick`, as it sent it, so a page steady on its
-// link sends the same row again; standing down or coasting, just [seat,
-// kind]: the input isn't used.
+// steer, handbrake, fire, recover, aim x, y, z, lag, lock] — lag: steps the
+// tick the page saw lies behind `tick`, as it sent it, so a page steady on
+// its link sends the same row again; lock: the seat its missile is to lock
+// on (a replay from before missiles has none: -1); standing down or
+// coasting, just [seat, kind]: the input isn't used.
 export const givenRow = (seat: number, { kind, input: i }: Given, tick: number) =>
-  kind === DRIVING ? [seat, kind, i.throttle, i.steer, +i.handbrake, +i.fire, +i.recover, i.aim.x, i.aim.y, i.aim.z, tick - i.view] : [seat, kind]
+  kind === DRIVING ? [seat, kind, i.throttle, i.steer, +i.handbrake, +i.fire, +i.recover, i.aim.x, i.aim.y, i.aim.z, tick - i.view, i.lock] : [seat, kind]
 
 // An `in` row read back: the seat, the given without its view, and the lag to rebuild the view from on each step.
-export function readGiven([seat, kind, throttle = 0, steer = 0, handbrake = 0, fire = 0, recover = 0, x = 0, y = 0, z = 0, lag = 0]: number[]) {
+export function readGiven([seat, kind, throttle = 0, steer = 0, handbrake = 0, fire = 0, recover = 0, x = 0, y = 0, z = 0, lag = 0, lock = -1]: number[]) {
   return {
     seat,
     kind: kind as Given['kind'],
-    input: { throttle, steer, handbrake: !!handbrake, fire: !!fire, recover: !!recover, aim: { x, y, z } },
+    input: { throttle, steer, handbrake: !!handbrake, fire: !!fire, recover: !!recover, aim: { x, y, z }, lock },
     lag,
   }
 }

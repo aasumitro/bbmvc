@@ -1,8 +1,8 @@
 import type RAPIER from '@dimforge/rapier3d-compat'
 import type * as THREE from 'three'
 import type { NavGraph } from '../../content/arenas/arena.ts'
-import { distance as flat, wrap } from '../../shared/math.ts'
-import { AI, type Agent, type Brain } from './brain.ts'
+import { distance as flat, wrap, type Point } from '../../shared/math.ts'
+import { AI, type Agent, type Brain, type KnownMine } from './brain.ts'
 import { open } from './perception.ts'
 
 // How a bot finds its way (sim/ai/): the nav graph's routes and the point a
@@ -15,9 +15,19 @@ function nodesInView(world: RAPIER.World, nav: NavGraph, at: THREE.Vector3) {
   return seen.length ? seen : order.slice(0, 1)
 }
 
+// How near a leg from `a` to `b` passes `p`, on the ground.
+function offLeg(p: Point, a: Point, b: Point) {
+  const dx = b.x - a.x
+  const dz = b.z - a.z
+  const t = Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.z - a.z) * dz) / (dx * dx + dz * dz || 1)))
+  return Math.hypot(p.x - a.x - dx * t, p.z - a.z - dz * t)
+}
+
 // Every node's driving distance to node `end` and its next hop there
 // (Dijkstra from the end; the graphs are small). -1: the end, or cut off.
-export function routesTo(nav: NavGraph, end: number) {
+// A leg passing within AI.berth of one of `mines` costs more for each.
+export function routesTo(nav: NavGraph, end: number, mines: readonly Point[] = []) {
+  const [berth, toll] = AI.berth
   const count = nav.nodes.length
   const cost = new Float64Array(count).fill(Infinity)
   const next = new Int32Array(count).fill(-1)
@@ -29,7 +39,8 @@ export function routesTo(nav: NavGraph, end: number) {
     if (u < 0) break
     done[u] = 1
     for (const v of nav.links[u]) {
-      const through = cost[u] + flat(nav.nodes[u], nav.nodes[v])
+      let through = cost[u] + flat(nav.nodes[u], nav.nodes[v])
+      for (const mine of mines) if (offLeg(mine, nav.nodes[u], nav.nodes[v]) < berth) through += toll
       if (through < cost[v]) {
         cost[v] = through
         next[v] = u
@@ -42,14 +53,24 @@ export function routesTo(nav: NavGraph, end: number) {
 // Sets `goal` (the caller's) on the way to `destination`: a point a little
 // ahead along the current leg of the route, a lane right of it (pure
 // pursuit), so the bot keeps to its side of the street instead of cutting
-// across toward the next stop. Replans now and then; returns the speed to
-// hold to take the bend at that stop.
-export function travel(bot: Agent, brain: Brain, world: RAPIER.World, nav: NavGraph, destination: THREE.Vector3, dt: number, goal: THREE.Vector3) {
+// across toward the next stop. Replans now and then, round the hostile
+// mines it knows of; returns the speed to hold to take the bend at that stop.
+export function travel(
+  bot: Agent,
+  brain: Brain,
+  world: RAPIER.World,
+  nav: NavGraph,
+  destination: THREE.Vector3,
+  dt: number,
+  goal: THREE.Vector3,
+  mines: readonly KnownMine[] = [],
+) {
   brain.replan -= dt
   if (brain.replan <= 0) {
     brain.replan = AI.replan
     const end = nodesInView(world, nav, destination)[0]
-    const { cost, next } = routesTo(nav, end)
+    const known = mines.filter((m) => m.owner.team !== bot.team && flat(m.position, bot.position) < AI.detectRange).map((m) => m.position)
+    const { cost, next } = routesTo(nav, end, known)
     // join the graph wherever makes the whole trip shortest, not just at the nearest node
     let start = -1
     for (const i of nodesInView(world, nav, bot.position)) {

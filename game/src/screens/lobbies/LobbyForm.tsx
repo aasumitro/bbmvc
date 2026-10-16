@@ -217,7 +217,7 @@ export function LobbyForm({ lobby, host, asked, onClose }: LobbyFormProps) {
                     type="button"
                     aria-pressed={settings.items[id]}
                     onClick={() => change({ items: { ...settings.items, [id]: !settings.items[id] } })}
-                    className={`rounded-md border px-4 py-1.5 text-xs font-bold tracking-[0.2em] uppercase ${settings.items[id] ? 'border-red-500/60 bg-red-500/25 text-white' : 'border-white/15 bg-black/45 text-neutral-500 line-through hover:text-neutral-300'}`}
+                    className={`${CHIP} ${settings.items[id] ? CHIP_ON : 'border-white/15 bg-black/45 text-neutral-500 line-through hover:text-neutral-300'}`}
                   >
                     {label}
                   </button>
@@ -229,12 +229,20 @@ export function LobbyForm({ lobby, host, asked, onClose }: LobbyFormProps) {
               error={errors.weapons}
               hint={settings.weapons === 'all' ? 'Each driver’s own loadout' : 'Everyone, bots too, drives with this gun'}
             >
-              <Segmented
-                label="Weapons"
-                options={CUSTOM.weapons.map((id) => ({ id, label: id === 'all' ? 'All' : WEAPONS[id].name }))}
-                value={settings.weapons}
-                onChange={(weapons) => change({ weapons })}
-              />
+              <div role="radiogroup" aria-label="Weapons" className="flex flex-wrap gap-2">
+                {CUSTOM.weapons.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={settings.weapons === id}
+                    onClick={() => change({ weapons: id })}
+                    className={`${CHIP} ${settings.weapons === id ? CHIP_ON : 'border-white/15 bg-black/45 text-neutral-400 hover:text-white'}`}
+                  >
+                    {id === 'all' ? 'All' : WEAPONS[id].name}
+                  </button>
+                ))}
+              </div>
             </Field>
             <Field
               label="Kill limit"
@@ -263,6 +271,9 @@ export function LobbyForm({ lobby, host, asked, onClose }: LobbyFormProps) {
 
 const INPUT =
   'w-full rounded-md border border-white/15 bg-black/45 px-3 py-2 text-sm text-[#f2ece0] outline-hidden placeholder:text-neutral-500 focus:border-red-500 disabled:opacity-50'
+// The pickups' toggles and the guns' choice: separate chips that wrap.
+const CHIP = 'rounded-md border px-4 py-1.5 text-xs font-bold tracking-[0.2em] uppercase'
+const CHIP_ON = 'border-red-500/60 bg-red-500/25 text-white'
 const OFF_ON = [
   { id: false, label: 'Off' },
   { id: true, label: 'On' },

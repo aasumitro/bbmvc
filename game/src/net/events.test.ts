@@ -19,6 +19,8 @@ const EVERY: GameEvent[] = [
   { code: 'rc', tick: 99, seat: 4 },
   { code: 'ru', tick: 100, event: { type: 'kill', killer: 1, victim: 2 } },
   { code: 'go', tick: 101, seed: 123456 },
+  { code: 'ml', tick: 102, id: 17, owner: 3, at: v(-12.5, 0.04, 33.25) },
+  { code: 'mg', tick: 103, id: 17 },
 ]
 
 describe('wire events', () => {
@@ -42,6 +44,8 @@ describe('wire events', () => {
     ['cr', [0]],
     ['ru', []],
     ['go', []],
+    ['ml', [3]],
+    ['mg', []],
   ] as const)('%s: the seats it names are %j', (code, seats) => {
     expect(owners(EVERY.find((event) => event.code === code)!)).toEqual(seats)
   })

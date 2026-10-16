@@ -51,11 +51,14 @@ match.step(dt)                             live = phase is playing or destroyed 
 │   ├─ for every machine:
 │   │     last pose ← pose                 (interpolation, crash detection)
 │   │     driveCar(control, or WRECKED when down/held, × mode.speedFactor)
-│   │     alive: rightIfUpended; pullTrigger → fire (hitscan or rocket launch); reload edges reported
+│   │     alive: rightIfUpended; holdLock (a missile's); pullTrigger → fire (hitscan rays, a rocket or
+│   │       missile launched, or a mine laid behind); reload edges reported
 │   │     down: deadFor += dt
 │   ├─ world.step()                        Rapier, fixed timestep 1/60 s
 │   ├─ for every machine: read pose back; a hard jolt is a crash (reported)
-│   ├─ flyRockets(dt)                      swept ray per rocket; bursts: shove + falloff damage
+│   ├─ strike(c) for every machine with a ram: the machines it touched (Rapier's contact pairs), hurt by closing speed
+│   ├─ flyRockets(dt)                      swept ray per rocket (a locked missile turns after its target); bursts: shove + falloff damage
+│   ├─ tendMines(dt)                       mines age out; an armed one goes off under the first hostile in its trigger
 │   └─ when live: rules.tick(dt); respawn everyone the rules say is due (pickSpawn, sees, reset)
 ├─ when live: elapsed += dt; mode.report(feed) (events → feed lines, callouts); feed.beep (countdown ticks)
 ├─ destroyed and the player is back → playing
@@ -65,8 +68,9 @@ match.step(dt)                             live = phase is playing or destroyed 
 
 Inside the step, combat reports to the view as it happens (`SimEvents`:
 `fired`, `shot`, `rocket`, `burst`, `hurt`, `wrecked`, `crashed`,
-`reloading`, `respawned`), at the same points the old inline code ran, so
-effects and sounds keep their order within the step.
+`reloading`, `respawned`, `recovered`, `laid`, `gone`), at the same points
+the old inline code ran, so effects and sounds keep their order within
+the step.
 
 ## Timing rules
 

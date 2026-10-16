@@ -62,6 +62,8 @@ export function page(link: Link, arena: Arena) {
     reloading: record('reloading'),
     respawned: record('respawned'),
     recovered: record('recovered'),
+    laid: record('laid'),
+    gone: record('gone'),
   }
   const lines: string[] = []
   const feed: Feed = {
@@ -78,7 +80,7 @@ export function page(link: Link, arena: Arena) {
   const refits: Combatant[] = []
   const restarts: number[] = []
   const client = createNetClient({ link, ...seated, events, feed, refit: (c) => refits.push(c), restarted: (seed) => restarts.push(seed) })
-  const control = { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false, aim: new THREE.Vector3() }
+  const control = { throttle: 0, steer: 0, handbrake: false, fire: false, recover: false, aim: new THREE.Vector3(), lock: -1 }
   return { link, ...seated, client, shown, lines, refits, restarts, control, awake: true, owed: 0, framedAt: -1 }
 }
 
