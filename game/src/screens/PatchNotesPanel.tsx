@@ -2,6 +2,12 @@ import { useState } from 'react'
 
 const ENTRIES = [
   {
+    version: '0.13.1',
+    notes: [
+      'A custom lobby’s owner can start alone against bots: one bot is enough (1 v 1), or fill the lobby with them (1 v 6 in Team Deathmatch). Anyone else in the lobby still has to be Ready',
+    ],
+  },
+  {
     version: '0.13.0',
     notes: [
       'A second machine in the garage: the Brute, an armoured hauler. 135 hull points to the Razor’s 100 and 2,200 kg; 85 km/h, 0–80 in 5.5 s and a 14.5 m turning circle, so slow off the line and wide in the turns, but a Rocket Pod needs four direct hits to wreck it. On Vehicle, ←→ change the machine; bots drive both',

@@ -168,6 +168,20 @@ const lb = <T extends Lobbying['do']>(action: T, fields: Record<string, unknown>
 {
   const x = world()
   x.act('o', create()) // team deathmatch, twelve
+  x.act('o', lb('bot', { slot: 3, skill: 'easy' }))
+  x.act('o', lb('start'))
+  check(!x.w.plans.length, 'the owner and a bot, both on blue: no start')
+  for (const slot of [6, 7, 8, 9, 10, 11]) x.act('o', lb('bot', { slot, skill: 'normal' }))
+  x.act('o', lb('start'))
+  const plan = x.w.plans[0]
+  check(
+    !!plan && 'uid' in plan[0]! && plan.slice(6).every((s) => !!s && 'skill' in s) && plan.filter((s) => s === null).length === 4,
+    'the owner alone against six bots: it starts',
+  )
+}
+{
+  const x = world()
+  x.act('o', create()) // team deathmatch, twelve
   const { code } = x.lobbyOf('o')!
   x.act('o', lb('start'))
   check(!x.w.plans.length, 'alone: no start')

@@ -454,7 +454,7 @@ export function createLobbies(hooks: LobbyHooks, config: LobbiesConfig = LOBBIES
   // Why the owner can't start yet ('' when they can): lobbyRules.ts.
   function unstartable(l: Lobby) {
     const waiting = [...l.members.values()].filter((m) => m.uid !== l.owner && (!m.ready || m.away >= 0)).length
-    return startable({ mode: l.mode, size: l.settings.size, slots: l.slots, people: l.members.size, waiting })
+    return startable({ mode: l.mode, size: l.settings.size, slots: l.slots, waiting })
   }
 
   function fresh() {

@@ -17,7 +17,12 @@ const owner = person('o', false)
 describe('startable and emptySide', () => {
   it.each([
     ['alone at the start', 'tdm', slots(12, { 0: owner }), 'alone', 1],
-    ['alone with a bot on red', 'tdm', slots(12, { 0: owner, 6: bot }), 'alone', -1],
+    ['the owner and a bot on red', 'tdm', slots(12, { 0: owner, 6: bot }), '', -1],
+    ['the owner against six bots', 'tdm', slots(12, { 0: owner, 6: bot, 7: bot, 8: bot, 9: bot, 10: bot, 11: bot }), '', -1],
+    ['1 v 1, the owner and a bot', 'tdm', slots(2, { 0: owner, 1: bot }), '', -1],
+    ['the owner and a bot, both on blue', 'tdm', slots(12, { 0: owner, 3: bot }), 'sides', 1],
+    ['free for all, the owner alone', 'ffa', slots(6, { 0: owner }), 'alone', -1],
+    ['free for all, the owner and a bot', 'ffa', slots(6, { 0: owner, 2: bot }), '', -1],
     ['a newcomer not ready', 'tdm', slots(12, { 0: owner, 6: person('m', false) }), 'waiting', -1],
     ['a member ready but away', 'tdm', slots(8, { 0: owner, 4: person('m', true, true) }), 'waiting', -1],
     ['both on blue, nobody red', 'tdm', slots(12, { 0: owner, 3: person('m') }), 'sides', 1],
@@ -27,9 +32,8 @@ describe('startable and emptySide', () => {
     ['free for all, two people', 'ffa', slots(12, { 0: owner, 1: person('m') }), '', -1],
     ['free for all, a bot beside', 'ffa', slots(6, { 0: owner, 1: person('m'), 3: bot }), '', -1],
   ] as const)('%s', (_, mode, at, reason, empty) => {
-    const people = at.filter((slot) => slot.kind === 'person')
-    const waiting = people.filter((p) => p.uid !== 'o' && (!p.ready || p.away)).length
-    expect(startable({ mode, size: at.length, slots: at, people: people.length, waiting })).toBe(reason)
+    const waiting = at.filter((slot) => slot.kind === 'person' && slot.uid !== 'o' && (!slot.ready || slot.away)).length
+    expect(startable({ mode, size: at.length, slots: at, waiting })).toBe(reason)
     expect(emptySide(mode, at.length, at)).toBe(empty)
   })
 })
