@@ -7,6 +7,10 @@ version it shipped with.
 
 ## Unreleased
 
+- The repository is `aasumitro/scrapyard` (was `aasumitro/bbmvc`; GitHub redirects the old
+  name): the README's CI badge, the game's main menu and the site link to it. The deploy's
+  Google sign-in now checks the repository by id, not by name, so a rename no longer breaks it.
+
 ### Game (`game/`)
 
 - Custom lobbies: the owner can start against bots alone. `startable` (`src/net/lobbyRules.ts`)

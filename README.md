@@ -4,7 +4,7 @@ The game is called **Scrapyard**: multiplayer car combat in the browser. Pick an
 
 Scrapyard is in active development: new arenas, machines, and weapons land with each version.
 
-[![CI](https://github.com/aasumitro/bbmvc/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
+[![CI](https://github.com/aasumitro/scrapyard/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Three.js](https://img.shields.io/badge/Three.js-r186-black?logo=three.js)](https://threejs.org/)
