@@ -7,6 +7,13 @@ version it shipped with.
 
 ## Unreleased
 
+### Game (`game/`)
+
+- Custom lobbies: the owner can start against bots alone. `startable` (`src/net/lobbyRules.ts`)
+  now asks for someone to play against, a person or a bot, instead of two people; everyone
+  else must still be Ready and in Team Deathmatch each side needs someone. A room left with
+  only bots still ends after 10 s. Patch notes 0.13.1; the site's guide says the same.
+
 ## 0.13.0 — 2026-10-16
 
 The game's code reorganised into layers with one test runner, the game itself unchanged (plan

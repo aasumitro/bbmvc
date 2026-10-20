@@ -32,15 +32,15 @@ function standing() {
 }
 
 // Why the owner can't start yet ('' they can), as the server holds it
-// (net/lobbyRules.ts): two people, everyone else ready and here, and in a
+// (net/lobbyRules.ts): someone to play, everyone else ready and here, and in a
 // team mode someone on each side. Never how many slots are open.
 function startHint(lobby: LobbyView) {
   const all = people(lobby)
   const waiting = all.filter((p) => !p.owner && (!p.ready || p.away))
   const mode = modeOf(lobby)
-  switch (startable({ mode, size: lobby.size, slots: lobby.slots, people: all.length, waiting: waiting.length })) {
+  switch (startable({ mode, size: lobby.size, slots: lobby.slots, waiting: waiting.length })) {
     case 'alone':
-      return 'A match needs two people: invite someone'
+      return 'Add a bot or invite someone'
     case 'waiting':
       return `Waiting for ${waiting[0].name}${waiting.length > 1 ? ` and ${waiting.length - 1} more` : ''}`
     case 'sides':
@@ -77,8 +77,8 @@ export function Tally({ lobby, won }: { lobby: LobbyView; won?: string }) {
 }
 
 // A custom lobby's waiting room (mockup 3): who's in which slot, ready or
-// not; the owner's Start (from two people, all ready, however many slots
-// are open) and the rest's Ready; the match's settings (the owner edits
+// not; the owner's Start (from one other, a person or a bot, all ready,
+// however many slots are open) and the rest's Ready; the match's settings (the owner edits
 // them in the drawer); the invite; the tally; the lobby's chat, which
 // carries on into the match. While a match runs without the player: its
 // time left, and Join match when the lobby lets people in mid-match.
