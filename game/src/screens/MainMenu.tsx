@@ -7,7 +7,7 @@ import { Menu } from './Menu.tsx'
 import { LATEST_VERSION, PatchNotesPanel } from './PatchNotesPanel.tsx'
 import { RestoreDefaults, SettingsPanel } from './SettingsPanel.tsx'
 
-const REPO = 'https://github.com/aasumitro/bbmvc' // the source, the corner's second button
+const REPO = 'https://github.com/aasumitro/scrapyard' // the source, the corner's second button
 
 // The corner's buttons: the patch notes and the source, one look.
 const CORNER_BUTTON =
