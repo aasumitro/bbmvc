@@ -101,11 +101,14 @@ try {
   assert.ok(a.open(), 'refusals leave the socket open')
   console.log('ok  refused: rooms not the game’s, groups, over 200 characters, empty, not {"text"}; the socket stays open')
 
-  // 8 messages in 10 s at most: 17 in a moment span two of chat.lua's 10 s windows at most, so some are refused
+  // 8 messages in 10 s at most, in chat.lua's fixed windows (:00, :10, ...). The burst starts just after
+  // one opens, so the messages above count in the window before; on a slow link it may still run into
+  // the next, so the check is the shape: up to 8 pass, the rest are refused, then a new window's 8 at most.
+  await new Promise((resolve) => setTimeout(resolve, 10_500 - (Date.now() % 10_000)))
   const sent = []
   for (let n = 0; n < 17; n++) sent.push(await say(a, inA.channel.id, { text: `spam ${n}` }))
-  const passed = sent.filter((reply) => !refused(reply)).length
-  assert.ok(passed >= 6 && passed <= 16 && refused(sent.at(-1)), `a burst is cut off at 8 messages in 10 s (${sent.map((r) => (refused(r) ? 'x' : '.')).join('')})`)
+  const shape = sent.map((r) => (refused(r) ? 'x' : '.')).join('')
+  assert.match(shape, /^\.{1,8}x+\.{0,8}x*$/, `a burst is cut off at 8 messages in 10 s (${shape})`)
   assert.ok(!refused(await say(b, inA.channel.id, { text: 'me too' })), 'the limit is each user’s own')
   console.log('ok  rate: 8 messages in 10 s a user')
 
